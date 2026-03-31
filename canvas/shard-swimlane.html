@@ -1,0 +1,334 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Shard - User Flow Swimlane</title>
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg: #0a0a0f;
+      --surface: #12121a;
+      --border: #1e1e2e;
+      --setup: #00ef8b;
+      --heartbeat: #3b82f6;
+      --trigger: #f59e0b;
+      --claim: #ec4899;
+      --text: #e4e4e7;
+      --text-muted: #71717a;
+    }
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: 'Inter', sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      overflow-x: auto;
+    }
+    .container {
+      max-width: 1600px;
+      margin: 0 auto;
+      padding: 40px;
+    }
+    h1 {
+      font-family: 'Space Grotesk', sans-serif;
+      font-size: 42px;
+      font-weight: 700;
+      margin-bottom: 8px;
+      background: linear-gradient(135deg, var(--setup), var(--claim));
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+    .subtitle {
+      color: var(--text-muted);
+      font-size: 16px;
+      margin-bottom: 40px;
+    }
+    .swimlane-container {
+      overflow-x: auto;
+      padding-bottom: 20px;
+    }
+    .swimlane {
+      display: grid;
+      grid-template-columns: 200px repeat(4, 1fr);
+      gap: 2px;
+      background: var(--border);
+      border-radius: 12px;
+      overflow: hidden;
+      min-width: 1200px;
+    }
+    .header {
+      background: var(--surface);
+      padding: 20px;
+      text-align: center;
+      font-family: 'Space Grotesk', sans-serif;
+      font-weight: 600;
+      font-size: 14px;
+    }
+    .header.user { background: #1e3a5f; }
+    .header.contract { background: #1a2744; }
+    .header.lit { background: #2d1f4a; }
+    .header.storacha { background: #3d2314; }
+    .header span {
+      display: block;
+      font-size: 11px;
+      font-weight: 400;
+      color: var(--text-muted);
+      margin-top: 4px;
+    }
+    .cell {
+      background: var(--bg);
+      padding: 16px;
+      min-height: 140px;
+      position: relative;
+    }
+    .step {
+      background: var(--surface);
+      border-radius: 8px;
+      padding: 12px 16px;
+      margin-bottom: 8px;
+      border-left: 3px solid;
+      font-size: 13px;
+      line-height: 1.5;
+    }
+    .step.setup { border-color: var(--setup); }
+    .step.heartbeat { border-color: var(--heartbeat); }
+    .step.trigger { border-color: var(--trigger); }
+    .step.claim { border-color: var(--claim); }
+    .step-num {
+      font-family: 'Space Grotesk', sans-serif;
+      font-weight: 600;
+      font-size: 11px;
+      margin-bottom: 4px;
+      opacity: 0.7;
+    }
+    .arrow-col {
+      background: var(--bg);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 20px;
+      color: var(--text-muted);
+    }
+    .time-label {
+      font-size: 11px;
+      color: var(--text-muted);
+      text-align: center;
+      padding: 8px;
+      background: var(--surface);
+    }
+    .phase-label {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 16px;
+      font-family: 'Space Grotesk', sans-serif;
+      font-weight: 600;
+      font-size: 13px;
+    }
+    .phase-label.setup { background: rgba(0, 239, 139, 0.1); color: var(--setup); }
+    .phase-label.heartbeat { background: rgba(59, 130, 246, 0.1); color: var(--heartbeat); }
+    .phase-label.trigger { background: rgba(245, 158, 11, 0.1); color: var(--trigger); }
+    .phase-label.claim { background: rgba(236, 72, 153, 0.1); color: var(--claim); }
+    .empty-cell {
+      background: var(--bg);
+    }
+
+    .legend {
+      display: flex;
+      justify-content: center;
+      gap: 30px;
+      margin-top: 40px;
+      flex-wrap: wrap;
+    }
+    .legend-item {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 13px;
+    }
+    .legend-dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 3px;
+    }
+    .legend-dot.setup { background: var(--setup); }
+    .legend-dot.heartbeat { background: var(--heartbeat); }
+    .legend-dot.trigger { background: var(--trigger); }
+    .legend-dot.claim { background: var(--claim); }
+
+    .key-insight {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 24px;
+      margin-top: 40px;
+    }
+    .key-insight h3 {
+      font-family: 'Space Grotesk', sans-serif;
+      color: var(--trigger);
+      margin-bottom: 12px;
+    }
+    .key-insight p {
+      font-size: 14px;
+      line-height: 1.6;
+      color: var(--text-muted);
+    }
+    .key-insight strong { color: var(--text); }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>Shard - User Flow</h1>
+    <p class="subtitle">End-to-end lifecycle: Setup, Heartbeat, Trigger, Claim</p>
+
+    <div class="swimlane-container">
+      <div class="swimlane">
+        <!-- Headers -->
+        <div class="header">Phase</div>
+        <div class="header user">User / Frontend<span>Browser + Flow Wallet</span></div>
+        <div class="header contract">Flow Contract<span>Cadence + Scheduled Tx</span></div>
+        <div class="header lit">Lit Protocol<span>Conditional Decryption</span></div>
+        <div class="header storacha">Storacha<span>Encrypted Storage</span></div>
+
+        <!-- Setup Row -->
+        <div class="phase-label setup">1. Setup</div>
+        <div class="cell">
+          <div class="step setup">
+            <div class="step-num">1.1</div>
+            Connect Flow wallet via FCL
+          </div>
+          <div class="step setup">
+            <div class="step-num">1.2</div>
+            Set recovery address + inactivity period
+          </div>
+          <div class="step setup">
+            <div class="step-num">1.3</div>
+            Generate fresh recovery wallet
+          </div>
+        </div>
+        <div class="cell">
+          <div class="step setup">
+            <div class="step-num">1.4</div>
+            CreateVault transaction deployed
+          </div>
+          <div class="step setup">
+            <div class="step-num">1.5</div>
+            Schedule first check-in deadline
+          </div>
+        </div>
+        <div class="cell">
+          <div class="step setup">
+            <div class="step-num">1.6</div>
+            Encrypt recovery key with access condition: triggered==true
+          </div>
+        </div>
+        <div class="cell">
+          <div class="step setup">
+            <div class="step-num">1.7</div>
+            Upload encrypted blob
+          </div>
+          <div class="step setup">
+            <div class="step-num">1.8</div>
+            Return CID
+          </div>
+        </div>
+
+        <!-- Arrow Row -->
+        <div class="phase-label heartbeat">2. Heartbeat</div>
+        <div class="cell">
+          <div class="step heartbeat">
+            <div class="step-num">2.1</div>
+            User clicks "I'm alive" periodically
+          </div>
+        </div>
+        <div class="cell">
+          <div class="step heartbeat">
+            <div class="step-num">2.2</div>
+            Cancel existing scheduled tx
+          </div>
+          <div class="step heartbeat">
+            <div class="step-num">2.3</div>
+            Schedule new check-in deadline
+          </div>
+        </div>
+        <div class="cell empty-cell"></div>
+        <div class="cell empty-cell"></div>
+
+        <!-- Trigger Row -->
+        <div class="phase-label trigger">3. Auto-Trigger</div>
+        <div class="cell">
+          <div class="step trigger">
+            <div class="step-num">3.1</div>
+            (No action needed - it's automatic!)
+          </div>
+        </div>
+        <div class="cell">
+          <div class="step trigger">
+            <div class="step-num">3.2</div>
+            Scheduled tx fires automatically
+          </div>
+          <div class="step trigger">
+            <div class="step-num">3.3</div>
+            Set contract.triggered = true
+          </div>
+        </div>
+        <div class="cell">
+          <div class="step trigger">
+            <div class="step-num">3.4</div>
+            Access condition now satisfied
+          </div>
+        </div>
+        <div class="cell empty-cell"></div>
+
+        <!-- Claim Row -->
+        <div class="phase-label claim">4. Claim</div>
+        <div class="cell">
+          <div class="step claim">
+            <div class="step-num">4.1</div>
+            Beneficiary connects Flow wallet
+          </div>
+          <div class="step claim">
+            <div class="step-num">4.2</div>
+            Request recovery key decryption
+          </div>
+        </div>
+        <div class="cell">
+          <div class="step claim">
+            <div class="step-num">4.3</div>
+            Verify triggered==true
+          </div>
+          <div class="step claim">
+            <div class="step-num">4.4</div>
+            Grant access to recovery wallet
+          </div>
+        </div>
+        <div class="cell">
+          <div class="step claim">
+            <div class="step-num">4.5</div>
+            Decrypt key using triggered flag
+          </div>
+        </div>
+        <div class="cell">
+          <div class="step claim">
+            <div class="step-num">4.6</div>
+            Provide encrypted blob via CID
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="legend">
+      <div class="legend-item"><div class="legend-dot setup"></div>Setup (Vault Creation)</div>
+      <div class="legend-item"><div class="legend-dot heartbeat"></div>Heartbeat (Keep Alive)</div>
+      <div class="legend-item"><div class="legend-dot trigger"></div>Auto-Trigger (No Keeper)</div>
+      <div class="legend-item"><div class="legend-dot claim"></div>Claim (Recovery)</div>
+    </div>
+
+    <div class="key-insight">
+      <h3>The Killer Feature: No Keepers Needed</h3>
+      <p>Unlike other death recovery systems, <strong>the vault triggers itself</strong>. Flow's scheduled transactions fire automatically when the deadline passes - no external bot, no trusted third party, no friend needed to call a trigger function. The vault wakes up on its own.</p>
+    </div>
+  </div>
+</body>
+</html>

@@ -1,0 +1,252 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Shard - System Architecture</title>
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg: #0a0a0f;
+      --surface: #12121a;
+      --border: #1e1e2e;
+      --flow: #00ef8b;
+      --lit: #7928ca;
+      --storacha: #ff6b35;
+      --text: #e4e4e7;
+      --text-muted: #71717a;
+    }
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: 'Inter', sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      overflow-x: hidden;
+    }
+    .container {
+      max-width: 1400px;
+      margin: 0 auto;
+      padding: 60px 40px;
+    }
+    h1 {
+      font-family: 'Space Grotesk', sans-serif;
+      font-size: 48px;
+      font-weight: 700;
+      margin-bottom: 8px;
+      background: linear-gradient(135deg, var(--flow), var(--lit));
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+    .subtitle {
+      color: var(--text-muted);
+      font-size: 18px;
+      margin-bottom: 60px;
+    }
+    .diagram {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      padding: 60px;
+      margin-bottom: 40px;
+    }
+    .layer {
+      display: flex;
+      justify-content: center;
+      gap: 40px;
+      flex-wrap: wrap;
+    }
+    .node {
+      background: var(--bg);
+      border: 2px solid var(--border);
+      border-radius: 12px;
+      padding: 24px 32px;
+      text-align: center;
+      min-width: 180px;
+      position: relative;
+      transition: all 0.3s ease;
+    }
+    .node:hover {
+      transform: translateY(-4px);
+      box-shadow: 0 20px 40px rgba(0,0,0,0.4);
+    }
+    .node-icon {
+      font-size: 32px;
+      margin-bottom: 12px;
+    }
+    .node-title {
+      font-family: 'Space Grotesk', sans-serif;
+      font-weight: 600;
+      font-size: 16px;
+      margin-bottom: 4px;
+    }
+    .node-desc {
+      font-size: 12px;
+      color: var(--text-muted);
+    }
+    .node.flow { border-color: var(--flow); }
+    .node.flow .node-icon { color: var(--flow); }
+    .node.lit { border-color: var(--lit); }
+    .node.lit .node-icon { color: var(--lit); }
+    .node.storacha { border-color: var(--storacha); }
+    .node.storacha .node-icon { color: var(--storacha); }
+    .node.frontend { border-color: #3b82f6; }
+    .node.frontend .node-icon { color: #3b82f6; }
+    .row-label {
+      text-align: center;
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: 2px;
+      color: var(--text-muted);
+      margin: 40px 0 20px;
+    }
+    .row-label:first-of-type { margin-top: 0; }
+    .arrow {
+      display: flex;
+      justify-content: center;
+      padding: 20px 0;
+      color: var(--text-muted);
+      font-size: 24px;
+    }
+    .legend {
+      display: flex;
+      justify-content: center;
+      gap: 40px;
+      margin-top: 40px;
+      flex-wrap: wrap;
+    }
+    .legend-item {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 14px;
+    }
+    .legend-dot {
+      width: 12px;
+      height: 12px;
+      border-radius: 50%;
+    }
+    .legend-dot.flow { background: var(--flow); }
+    .legend-dot.lit { background: var(--lit); }
+    .legend-dot.storacha { background: var(--storacha); }
+    .legend-dot.frontend { background: #3b82f6; }
+    .connections {
+      display: flex;
+      justify-content: center;
+      gap: 20px;
+      margin-top: 40px;
+      flex-wrap: wrap;
+    }
+    .connection {
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 16px 24px;
+      font-size: 13px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+    .connection-arrow { color: var(--text-muted); }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>Shard Architecture</h1>
+    <p class="subtitle">Dead Man's Switch Wallet Recovery</p>
+
+    <div class="diagram">
+      <div class="layer">
+        <div class="node frontend">
+          <div class="node-icon">&#x1F4BB;</div>
+          <div class="node-title">Frontend</div>
+          <div class="node-desc">Next.js + FCL</div>
+        </div>
+      </div>
+
+      <div class="arrow">&#x2193; User Actions</div>
+
+      <div class="layer">
+        <div class="node flow">
+          <div class="node-icon">&#x26A1;</div>
+          <div class="node-title">Flow Blockchain</div>
+          <div class="node-desc">Cadence Contract<br>Scheduled Transactions</div>
+        </div>
+        <div class="node lit">
+          <div class="node-icon">&#x1F512;</div>
+          <div class="node-title">Lit Protocol</div>
+          <div class="node-desc">v8 Naga<br>Conditional Decrypt</div>
+        </div>
+        <div class="node storacha">
+          <div class="node-icon">&#x1F4BE;</div>
+          <div class="node-title">Storacha</div>
+          <div class="node-desc">w3up-client<br>Encrypted Blob Storage</div>
+        </div>
+      </div>
+
+      <div class="arrow">&#x2193; Data Flow</div>
+
+      <div class="layer">
+        <div class="node frontend">
+          <div class="node-icon">&#x1F3E0;</div>
+          <div class="node-title">User Wallet</div>
+          <div class="node-desc">Flow Wallet / Blocto<br>MetaMask (Lit AuthSig)</div>
+        </div>
+        <div class="node frontend">
+          <div class="node-icon">&#x1F916;</div>
+          <div class="node-title">Beneficiary</div>
+          <div class="node-desc">Recovery Wallet<br>Claim Access</div>
+        </div>
+      </div>
+
+      <div class="legend">
+        <div class="legend-item"><div class="legend-dot flow"></div>Flow (Cadence)</div>
+        <div class="legend-item"><div class="legend-dot lit"></div>Lit Protocol (Encryption)</div>
+        <div class="legend-item"><div class="legend-dot storacha"></div>Storacha (Storage)</div>
+        <div class="legend-item"><div class="legend-dot frontend"></div>Frontend / User</div>
+      </div>
+
+      <div class="connections">
+        <div class="connection">
+          <span>User creates vault</span>
+          <span class="connection-arrow">&#x2192;</span>
+          <span style="color: var(--flow)">Flow Contract</span>
+        </div>
+        <div class="connection">
+          <span>Key encrypted</span>
+          <span class="connection-arrow">&#x2192;</span>
+          <span style="color: var(--lit)">Lit (condition: triggered==true)</span>
+        </div>
+        <div class="connection">
+          <span>Blob stored</span>
+          <span class="connection-arrow">&#x2192;</span>
+          <span style="color: var(--storacha)">Storacha (CID returned)</span>
+        </div>
+        <div class="connection">
+          <span>CID on-chain</span>
+          <span class="connection-arrow">&#x2192;</span>
+          <span style="color: var(--flow)">Flow Contract</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="diagram">
+      <h3 style="font-family: 'Space Grotesk'; margin-bottom: 30px;">Key Integration Points</h3>
+      <div class="layer">
+        <div class="node flow">
+          <div class="node-title">Flow Scheduled Tx</div>
+          <div class="node-desc">Contract schedules its own check-in deadline<br>Self-triggers when deadline passes</div>
+        </div>
+        <div class="node lit">
+          <div class="node-title">Lit Access Condition</div>
+          <div class="node-desc">contract.triggered == true<br>Only decrypts after auto-trigger</div>
+        </div>
+        <div class="node storacha">
+          <div class="node-title">Storacha CID</div>
+          <div class="node-desc">Encrypted recovery key blob<br>CID stored on Flow contract</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</body>
+</html>
