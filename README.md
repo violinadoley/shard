@@ -1,6 +1,5 @@
 # Shard - Dead Man's Switch Wallet Recovery
 
-Hi
 
 **Your vault wakes up on its own if you stop checking in.**
 

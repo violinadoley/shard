@@ -7,54 +7,80 @@ access(all) contract Shard {
 
     access(all) var totalVaults: UInt64
 
-    // Storage paths
-    static let vaultStoragePath: StoragePath = /storage/shardVault
-    static let handlerStoragePath: StoragePath = /storage/shardHandler
-    static let adminStoragePath: StoragePath = /storage/shardAdmin
-    static let managerStoragePath: StoragePath = /storage/shardSchedulerManager
+    access(all) let vaultStoragePath: StoragePath
+    access(all) let handlerStoragePath: StoragePath
+    access(all) let managerStoragePath: StoragePath
+    access(all) let vaultOwnerPublicPath: PublicPath
 
-    // Store vault IDs per owner
+    access(all) event VaultCreated(ownerAddress: Address, recoveryAddress: Address, vaultId: UInt64)
+
+    access(all) struct VaultData {
+        access(all) let id: UInt64
+        access(all) let ownerAddress: Address
+        access(all) let recoveryAddress: Address
+        access(all) let inactivityPeriodSeconds: UFix64
+        access(all) let lastHeartbeat: UFix64
+        access(all) let triggered: Bool
+        access(all) let recoveryWalletCID: String?
+        access(all) let recoveryWalletAddress: String?
+        access(all) let timeUntilTrigger: UFix64
+
+        init(
+            id: UInt64, ownerAddress: Address, recoveryAddress: Address,
+            inactivityPeriodSeconds: UFix64, lastHeartbeat: UFix64,
+            triggered: Bool, recoveryWalletCID: String?, recoveryWalletAddress: String?,
+            timeUntilTrigger: UFix64
+        ) {
+            self.id = id; self.ownerAddress = ownerAddress
+            self.recoveryAddress = recoveryAddress
+            self.inactivityPeriodSeconds = inactivityPeriodSeconds
+            self.lastHeartbeat = lastHeartbeat; self.triggered = triggered
+            self.recoveryWalletCID = recoveryWalletCID
+            self.recoveryWalletAddress = recoveryWalletAddress
+            self.timeUntilTrigger = timeUntilTrigger
+        }
+    }
+
     access(all) resource interface VaultOwnerPublic {
-        access(all) let owner: Address
-        access(all) let vaultIds: [UInt64]
+        access(all) let ownerAddress: Address
+        access(all) var vaultIds: [UInt64]
+        access(all) fun triggerVault(vaultId: UInt64)
+        access(all) fun getVaultData(_ id: UInt64): Shard.VaultData?
+        access(all) fun getVaultTriggered(_ id: UInt64): Bool?
     }
 
     access(all) resource VaultOwner: VaultOwnerPublic {
-        access(all) let owner: Address
+        access(all) let ownerAddress: Address
         access(all) var vaultIds: [UInt64]
         access(all) var vaults: @{UInt64: Vault}
-        access(all) var handlers: @{UInt64: Handler}
-        access(all) var scheduledTxIds: {UInt64: UInt64}
 
         init(_owner: Address) {
-            self.owner = _owner
+            self.ownerAddress = _owner
             self.vaultIds = []
             self.vaults <- {}
-            self.handlers <- {}
-            self.scheduledTxIds = {}
         }
 
         access(all) fun createVault(
             recoveryAddress: Address,
             inactivityPeriodSeconds: UFix64
         ): UInt64 {
-            pre {
-                self.vaults[Shard.totalVaults + 1] == nil: "Vault already exists"
-            }
-
             let id = Shard.totalVaults + 1
             Shard.totalVaults = id
 
             let vault <- create Vault(
                 _id: id,
-                _owner: self.owner,
+                _ownerAddress: self.ownerAddress,
                 _recoveryAddress: recoveryAddress,
                 _inactivityPeriodSeconds: inactivityPeriodSeconds
             )
-
             self.vaults[id] <-! vault
             self.vaultIds.append(id)
 
+            emit Shard.VaultCreated(
+                ownerAddress: self.ownerAddress,
+                recoveryAddress: recoveryAddress,
+                vaultId: id
+            )
             return id
         }
 
@@ -62,172 +88,117 @@ access(all) contract Shard {
             return &self.vaults[id] as &Vault?
         }
 
-        access(all) fun scheduleHeartbeatCheck(vaultId: UInt64, delaySeconds: UFix64) {
-            pre {
-                self.vaults[vaultId] != nil: "Vault not found"
-            }
-
-            let future = getCurrentBlock().timestamp + delaySeconds
-            let priority = FlowTransactionScheduler.Priority.Medium
-            let executionEffort: UInt64 = 1000
-
-            let feeEstimate = FlowTransactionScheduler.calculateFee(
-                executionEffort: executionEffort,
-                priority: priority,
-                dataSizeMB: 0.0
-            )
-
-            let handler <- create Handler(_vaultId: vaultId, _owner: self.owner)
-            self.handlers[vaultId] <-! handler
-
-            let handlerRef = &self.handlers[vaultId] as &Handler
-
-            let handlerCap = self.owner.capabilities.storage.issue<&{FlowTransactionScheduler.TransactionHandler}>(
-                Shard.handlerStoragePath
-            )
-
-            let fees <- (self.owner.storage.borrow<&FlowToken.Vault>(
-                from: /storage/flowTokenVault
-            ) ?? panic("Missing FlowToken vault")).withdraw(amount: feeEstimate)
-
-            let manager = self.owner.storage.borrow<&FlowTransactionSchedulerUtils.Manager>(
-                from: Shard.managerStoragePath
-            ) ?? panic("Manager not found")
-
-            let txId = manager.schedule(
-                handlerCap: handlerCap,
-                data: nil,
-                timestamp: future,
-                priority: priority,
-                executionEffort: executionEffort,
-                fees: <-fees
-            )
-
-            self.scheduledTxIds[vaultId] = txId
+        access(all) fun triggerVault(vaultId: UInt64) {
+            let vault = self.getVault(vaultId) ?? panic("Vault not found")
+            vault.trigger()
         }
 
-        access(all) fun cancelScheduledTx(_ vaultId: UInt64) {
-            if let txId = self.scheduledTxIds[vaultId] {
-                let manager = self.owner.storage.borrow<&FlowTransactionSchedulerUtils.Manager>(
-                    from: Shard.managerStoragePath
-                ) ?? panic("Manager not found")
-                manager.cancel(txID: txId)
-                self.scheduledTxIds.remove(key: vaultId)
+        access(all) fun getVaultData(_ id: UInt64): Shard.VaultData? {
+            if let vault = self.getVault(id) {
+                return Shard.VaultData(
+                    id: vault.id, ownerAddress: vault.ownerAddress,
+                    recoveryAddress: vault.recoveryAddress,
+                    inactivityPeriodSeconds: vault.inactivityPeriodSeconds,
+                    lastHeartbeat: vault.lastHeartbeat, triggered: vault.triggered,
+                    recoveryWalletCID: vault.recoveryWalletCID,
+                    recoveryWalletAddress: vault.recoveryWalletAddress,
+                    timeUntilTrigger: vault.getTimeUntilTrigger()
+                )
             }
+            return nil
         }
 
-        destroy() {
-            destroy self.vaults
-            destroy self.handlers
+        access(all) fun getVaultTriggered(_ id: UInt64): Bool? {
+            return self.vaults[id]?.triggered
         }
     }
 
     access(all) resource Vault {
         access(all) let id: UInt64
-        access(all) let owner: Address
+        access(all) let ownerAddress: Address
         access(all) let recoveryAddress: Address
         access(all) var inactivityPeriodSeconds: UFix64
         access(all) var lastHeartbeat: UFix64
         access(all) var triggered: Bool
         access(all) var recoveryWalletCID: String?
+        access(all) var recoveryWalletAddress: String?
 
         init(
-            _id: UInt64,
-            _owner: Address,
-            _recoveryAddress: Address,
+            _id: UInt64, _ownerAddress: Address, _recoveryAddress: Address,
             _inactivityPeriodSeconds: UFix64
         ) {
-            self.id = _id
-            self.owner = _owner
+            self.id = _id; self.ownerAddress = _ownerAddress
             self.recoveryAddress = _recoveryAddress
             self.inactivityPeriodSeconds = _inactivityPeriodSeconds
             self.lastHeartbeat = getCurrentBlock().timestamp
             self.triggered = false
-            self.recoveryWalletCID = nil
+            self.recoveryWalletCID = nil; self.recoveryWalletAddress = nil
         }
 
         access(all) fun heartbeat() {
-            pre {
-                !self.triggered: "Vault already triggered"
-            }
+            pre { !self.triggered: "Vault already triggered" }
             self.lastHeartbeat = getCurrentBlock().timestamp
         }
 
         access(all) fun trigger() {
-            pre {
-                !self.triggered: "Vault already triggered"
-            }
+            pre { !self.triggered: "Vault already triggered" }
             self.triggered = true
-            log("Vault triggered automatically")
         }
 
         access(all) fun setRecoveryWalletCID(_ cid: String) {
             self.recoveryWalletCID = cid
         }
 
+        access(all) fun setRecoveryWalletAddress(_ addr: String) {
+            self.recoveryWalletAddress = addr
+        }
+
         access(all) fun getTimeUntilTrigger(): UFix64 {
-            if self.triggered {
-                return 0.0
-            }
+            if self.triggered { return 0.0 }
             let elapsed = getCurrentBlock().timestamp - self.lastHeartbeat
-            let remaining = self.inactivityPeriodSeconds - elapsed
-            return remaining > 0.0 ? remaining : 0.0
+            if elapsed >= self.inactivityPeriodSeconds { return 0.0 }
+            return self.inactivityPeriodSeconds - elapsed
         }
     }
 
+    // Handler: called by Flow scheduler when inactivity period expires
+    // Stored in user's account; triggers their vault cross-account via public capability
     access(all) resource Handler: FlowTransactionScheduler.TransactionHandler {
         access(all) let vaultId: UInt64
-        access(all) let owner: Address
+        access(all) let ownerAddress: Address
 
-        init(_vaultId: UInt64, _owner: Address) {
+        init(_vaultId: UInt64, _ownerAddress: Address) {
             self.vaultId = _vaultId
-            self.owner = _owner
+            self.ownerAddress = _ownerAddress
         }
 
         access(FlowTransactionScheduler.Execute)
         fun executeTransaction(id: UInt64, data: AnyStruct?) {
-            let ownerRef = Shard.account.storage.borrow<&VaultOwner>(
-                from: Shard.vaultStoragePath
-            ) ?? panic("VaultOwner not found")
-
-            let vaultRef = ownerRef.getVault(self.vaultId)
-                ?? panic("Vault not found")
-
-            vaultRef.trigger()
-
-            log("Scheduled transaction executed for vault ".concat(self.vaultId.toString()))
+            let ownerRef = getAccount(self.ownerAddress)
+                .capabilities.borrow<&{VaultOwnerPublic}>(Shard.vaultOwnerPublicPath)
+                ?? panic("VaultOwner public capability not found")
+            ownerRef.triggerVault(vaultId: self.vaultId)
         }
 
-        access(all) view fun getViews(): [Type] {
-            return [Type<FlowTransactionScheduler.TransactionHandlerMetadata>()]
-        }
-
-        access(all) fun resolveView(_ view: Type): AnyStruct? {
-            switch view {
-                case Type<FlowTransactionScheduler.TransactionHandlerMetadata>():
-                    return FlowTransactionScheduler.TransactionHandlerMetadata(
-                        description: "Shard Vault Handler for vault ".concat(self.vaultId.toString()),
-                        handlerStoragePath: Shard.handlerStoragePath
-                    )
-            }
-            return nil
-        }
+        access(all) view fun getViews(): [Type] { return [] }
+        access(all) fun resolveView(_ view: Type): AnyStruct? { return nil }
     }
 
-    access(all) fun getVaultOwner(_ addr: Address): &VaultOwner? {
-        return Shard.account.storage.borrow<&VaultOwner>(from: Shard.vaultStoragePath)
+    // Create a Handler resource for a vault (called from transaction)
+    access(all) fun createHandler(vaultId: UInt64, ownerAddress: Address): @Handler {
+        return <- create Handler(_vaultId: vaultId, _ownerAddress: ownerAddress)
+    }
+
+    access(all) fun getVaultOwner(_ addr: Address): &{VaultOwnerPublic}? {
+        return getAccount(addr)
+            .capabilities.borrow<&{VaultOwnerPublic}>(Shard.vaultOwnerPublicPath)
     }
 
     init() {
         self.totalVaults = 0
-
-        // Create and save manager
-        let manager <- FlowTransactionSchedulerUtils.createManager()
-        Shard.account.storage.save(<-manager, to: Shard.managerStoragePath)
-
-        let managerCap = Shard.account.capabilities.storage.issue<&FlowTransactionSchedulerUtils.Manager>(
-            Shard.managerStoragePath
-        )
-        Shard.account.capabilities.publish(managerCap, at: FlowTransactionSchedulerUtils.managerPublicPath)
+        self.vaultStoragePath = /storage/shardVaultOwner
+        self.handlerStoragePath = /storage/shardHandler
+        self.managerStoragePath = /storage/shardSchedulerManager
+        self.vaultOwnerPublicPath = /public/shardVaultOwner
     }
 }

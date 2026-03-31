@@ -1,12 +1,9 @@
 import "Shard"
 
-pub fun main(owner: Address, vaultId: UInt64): Bool {
-    let vaultOwner = Shard.account.storage.borrow<&Shard.VaultOwner>(
-        from: Shard.vaultStoragePath
-    ) ?? panic("VaultOwner not found")
+access(all) fun main(owner: Address, vaultId: UInt64): Bool {
+    let vaultOwner = getAccount(owner)
+        .capabilities.borrow<&{Shard.VaultOwnerPublic}>(at: /public/shardVaultOwner)
+        ?? panic("VaultOwner not found for address")
 
-    let vault = vaultOwner.getVault(vaultId)
-        ?? panic("Vault not found")
-
-    return vault.triggered
+    return vaultOwner.getVaultTriggered(vaultId) ?? false
 }
