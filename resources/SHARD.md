@@ -1,6 +1,8 @@
 # Shard — Dead Man's Switch Wallet Recovery
 
-**PL Genesis Hackathon Project | Deadline: March 31, 2026**
+**PL Genesis Hackathon Project**
+
+---
 
 ## The Problem
 
@@ -11,249 +13,224 @@ People lose access to crypto. People die. Families cannot recover assets. Existi
 A self-custodial vault that **wakes up on its own** if you stop checking in.
 
 - No keepers — Flow scheduled transactions self-trigger
-- No key exposure — Fresh wallet generation, never user upload
-- Deep sponsor integration — Using Flow's flagship Forte feature
+- No private key ever exists — recovery wallet is a Lit PKP
+- Deep sponsor integration — Flow Forte + Lit Chipotle + Storacha
 
-## The Delivery Problem (Critical Insight)
+---
 
-**The vault can auto-trigger, but how does the beneficiary know?**
+## Correct Architecture (Updated)
 
-A dead man's switch is USELESS if the beneficiary doesn't know:
-1. A vault exists with their name on it
-2. What to do when it triggers
-3. Where to go to claim
+### What the Recovery Wallet Actually Is
 
-### Our Solution: Beneficiary Portal + Discovery
+**Wrong (old approach):** Generate an ethers wallet (`ethers.Wallet.createRandom()`), store the private key encrypted somewhere, decrypt it later.
 
-**1. Beneficiary Portal** (Key Feature)
-A page where ANYONE connects their wallet and instantly sees:
-- "You are a beneficiary of X vaults"
-- List of claimable vaults with status
-- One-click claim flow
-- No need to remember app URL or instructions
+**Correct approach:** The recovery wallet is a **Lit PKP (Programmable Key Pair)**:
+- Created via Lit API → `POST /core/v1/create_wallet`
+- No private key is ever held by anyone
+- The key is split across Lit's decentralized nodes
+- It can only sign/act when a **Lit Action** approves it
+- The Lit Action is the gatekeeper — it checks Flow's `triggered` state
 
-**2. Vault Linking by Address**
-The contract stores `recoveryAddress` — anyone who owns that address can:
-1. Visit the app
-2. Connect wallet
-3. See all vaults where they are the beneficiary
-4. Claim triggered vaults
+So the "encryption/decryption" framing is wrong. There's nothing to encrypt. The **access condition IS the wallet**. Lit controls the PKP, and the condition is: "Is this vault triggered on Flow?"
 
-**3. Shareable Vault Card**
-During vault creation, generate a shareable card with:
-- Recovery wallet address (public, safe to share)
-- QR code linking to `/claim`
-- Instructions for beneficiary
-- Can be printed, stored in will, safe deposit box
+---
 
-**4. The Honest Truth**
-Blockchain CANNOT solve the "delivery" problem completely. The beneficiary needs SOME out-of-band mechanism:
-- A will naming the vault address
-- A safe deposit box with recovery instructions
-- An email to the beneficiary explaining what to do
+## Full End-to-End Flow
 
-Our app provides the Beneficiary Portal as the on-chain discovery mechanism, but users must still inform their beneficiaries through traditional means.
+### Vault Creation (Owner)
+1. Owner connects Flow wallet
+2. Frontend calls Lit API → creates PKP wallet
+   - `GET /core/v1/create_wallet` with account API key
+   - Returns `{ pkp_id, wallet_address }`
+   - `wallet_address` is the recovery wallet address (safe to share publicly)
+3. Frontend creates vault on Flow:
+   - Calls `setup_vault_owner.cdc` transaction
+   - Passes `recoveryAddress` (beneficiary's Flow address) + inactivity period
+   - Contract emits `VaultCreated(owner, recoveryAddress, vaultId)` event
+   - Scheduled transaction is set for inactivity period
+4. Frontend uploads **Lit Action JS** to IPFS (via Pinata or web3.storage)
+   - This JS checks Flow's triggered state before approving PKP access
+   - Returns the IPFS CID (e.g. `QmXyz...`)
+5. Frontend stores on Flow contract:
+   - `setRecoveryWalletCID(vaultId, ipfsCID)` — the Lit Action CID
+   - `setRecoveryWalletAddress(vaultId, pkpWalletAddress)` — the PKP address
+6. Owner saves PKP wallet address to share with beneficiary (out-of-band)
+
+### Heartbeat (Owner, periodic)
+1. Owner sends heartbeat transaction
+2. Contract cancels old scheduled tx, records new timestamp, schedules new tx
+
+### Auto-Trigger (Flow, no human needed)
+1. Scheduled transaction fires automatically after inactivity period
+2. Handler calls public capability → `triggerVault(vaultId)` → `triggered = true`
+3. No bot, no keeper — Flow does it natively (Forte feature)
+
+### Beneficiary Claim
+1. Beneficiary connects their Flow wallet
+2. Frontend queries `VaultCreated` events on Flow filtered by their address
+3. App shows: "You are beneficiary of X vaults" with status
+4. Beneficiary clicks Claim on a triggered vault
+5. Frontend calls Lit Chipotle REST API:
+   - `POST /core/v1/lit_action`
+   - Passes the IPFS CID (Lit Action), vaultId, beneficiary address
+6. Lit Action runs on Lit nodes:
+   - Fetches Flow contract state → checks `triggered == true`
+   - If triggered → PKP signs → returns proof of access
+   - If not triggered → rejects
+7. Beneficiary gets access to the PKP wallet → controls the assets
+
+---
+
+## Lit Protocol Chipotle (v3) — Correct Usage
+
+**Chipotle is REST API only. No SDK. No Datil. No Naga.**
+
+### What Goes Where
+
+| Item | Where it lives |
+|------|---------------|
+| PKP wallet address | On-chain (Flow contract field `recoveryWalletAddress`) |
+| Lit Action JS file | IPFS (uploaded via Pinata) |
+| IPFS CID of Lit Action | On-chain (Flow contract field `recoveryWalletCID`) |
+| IPFS CID in Lit dashboard | Registered under your group's "CID hashes permitted" |
+| Usage API Key | Frontend env var (`NEXT_PUBLIC_LIT_API_KEY`) |
+
+### The Lit Action (what goes on IPFS)
+
+The JS file must:
+1. Accept `vaultId` and `flowContractAddress` as params
+2. Call Flow testnet REST API to read the vault's `triggered` field
+3. If `triggered == true` → call `Lit.Actions.signEcdsa` with the PKP
+4. If `triggered == false` → call `Lit.Actions.setResponse({ response: "NOT_TRIGGERED" })`
+
+This file is immutable once on IPFS. The CID is its fingerprint. If you change the code, the CID changes.
+
+### API Endpoints Used
+
+| Endpoint | Method | When |
+|----------|--------|------|
+| `/core/v1/create_wallet` | GET | Vault creation — make the PKP |
+| `/core/v1/add_group` | POST | One-time setup |
+| `/core/v1/lit_action` | POST | Beneficiary claim — run the action |
+| `/core/v1/billing/balance` | GET | Check credits |
+
+### Execute Lit Action (Claim Step)
+
+```bash
+POST https://api.dev.litprotocol.com/core/v1/lit_action
+Headers: X-Api-Key: YOUR_USAGE_KEY
+Body:
+{
+  "ipfs_id": "QmYourLitActionCID",
+  "js_params": {
+    "vaultId": "1",
+    "flowContractAddress": "0xec3c1566d2b4bb6c",
+    "beneficiaryAddress": "0xabc..."
+  }
+}
+```
+
+---
+
+## Cadence Contract — Known Bugs
+
+These must be fixed before deployment works correctly:
+
+### Bug 1 — Handler borrows wrong account (Critical — auto-trigger broken)
+`executeTransaction` uses `Shard.account.storage` but `VaultOwner` is in the **user's** account.
+
+**Fix required:**
+- Add a `triggerVault()` method to `VaultOwnerPublic` interface
+- Publish a public capability from `VaultOwner` in setup transaction at `/public/shardVaultOwner`
+- Handler borrows that public capability using `getAccount(self.owner).capabilities.borrow(...)`
+
+### Bug 2 — `static let` invalid Cadence syntax
+Contract-level constants must use `access(all) let`, not `static let`.
+
+### Bug 3 — `create VaultOwner` missing `Shard.` prefix
+In transactions: `create VaultOwner(...)` → must be `create Shard.VaultOwner(_owner: signer.address)`
+
+### Bug 4 — `getVaultOwner()` ignores its address parameter
+Always borrows from `Shard.account` regardless of which address is passed. Needs to use capabilities to borrow from the correct user account.
+
+### Bug 5 — Missing `VaultCreated` event
+Without this event, beneficiary discovery (the claim portal) cannot work.
+```cadence
+access(all) event VaultCreated(owner: Address, recoveryAddress: Address, vaultId: UInt64)
+// Emit inside createVault()
+```
+
+### Bug 6 — Missing public capability setup
+Handler cannot reach a user's vault without a published capability. Setup transaction must publish `VaultOwner` at a public path.
+
+---
+
+## Beneficiary Discovery — How It Works
+
+The claim page needs to show a beneficiary all vaults assigned to their address. There is no magic on-chain lookup — you need **Flow events**.
+
+### The Pattern
+1. Contract emits `VaultCreated(owner, recoveryAddress, vaultId)` on every vault creation
+2. Frontend queries Flow for all `VaultCreated` events
+3. Filter: keep only events where `recoveryAddress == connectedWalletAddress`
+4. For each match, fetch current vault state (triggered or not)
+5. Show the list
+
+Events are permanently stored on-chain and queryable by type. This is the standard Flow pattern for "find all things related to my address."
+
+---
+
+## Repo Structure Notes
+
+- **Use `contracts/shard-vault/`** — this is the active Flow project with `flow.json`
+- **`contracts/cadence/`** is an older duplicate — ignore it
+- **`flow.json`** is correctly configured for testnet deployment to `ec3c1566d2b4bb6c`
+- **`Counter` and `CounterTransactionHandler`** in flow.json are leftover scaffolding — not needed
+- **`.pkey` file** (`shared-vault-aakash.pkey`) must exist locally to deploy — never commit it
+
+---
 
 ## Tech Stack
 
 | Component | Technology | Purpose |
 |-----------|------------|---------|
 | Smart Contracts | Flow Cadence | Vault logic + scheduled transactions |
-| Encryption | Lit Protocol v3 (Chipotle) | Conditional secret release |
-| Storage | Storacha | Encrypted key blob with CID |
+| Programmatic Wallet | Lit Protocol Chipotle (v3) PKP | Recovery wallet nobody owns |
+| Conditional Access | Lit Action (JS on IPFS) | Checks Flow triggered state |
+| Storage | Storacha | Stores uploaded files, returns CID |
 | Frontend | Next.js + FCL | User wallet connection |
+
+---
 
 ## Bounty Targets
 
 | Sponsor | Priority | Notes |
 |---------|----------|-------|
-| **Flow ($10k)** | Critical | Cadence + scheduled transactions (Forte) |
-| **Storacha** | Critical | w3up-client for encrypted blob |
-| **Lit Protocol** | Critical | v3 Chipotle for conditional decrypt |
+| **Flow ($10k)** | Critical | Cadence + scheduled transactions (Forte) — killer feature |
+| **Lit Protocol** | Critical | PKP programmatic wallet + Lit Action conditional access |
+| **Storacha** | Critical | w3up-client for CID storage |
 | **Fresh Code ($50k)** | High | Novel keeper-less inheritance |
-| **Infrastructure & Digital Rights** | Medium | Wallet recovery theme |
 
 ---
-
-## Lit Protocol Chipotle (v3) Setup
-
-**Chipotle** is Lit's new v3 network - REST API based, no SDK required.
-
-### Important: Network Migration
-
-- **Naga (v1) sunset:** April 1, 2026
-- **Chipotle (v3) is production:** Live since March 25, 2026
-- **Datil is dead** - Do NOT use
-
-### Step 1: Create Account
-
-1. Go to https://dashboard.dev.litprotocol.com
-2. Sign up for a new account
-3. You'll receive an API key
-
-Or via API:
-```bash
-curl -X POST "https://api.dev.litprotocol.com/core/v1/new_account" \
-  -H "Content-Type: application/json" \
-  -d '{"account_name":"Shard","account_description":"Vault recovery","email":"you@example.com"}'
-```
-
-Response:
-```json
-{"api_key": "your-api-key", "wallet_address": "0x..."}
-```
-
-### Step 2: Add Funds
-
-1. Go to https://dashboard.dev.litprotocol.com/dapps/dashboard/
-2. Click "Add Funds"
-3. Pay with credit card (minimum $5)
-
-Or via API:
-```bash
-# Get Stripe config
-curl "https://api.dev.litprotocol.com/core/v1/billing/stripe_config"
-
-# Check balance
-curl "https://api.dev.litprotocol.com/core/v1/billing/balance" \
-  -H "X-Api-Key: YOUR-API-KEY"
-```
-
-### Step 3: Create Usage API Key
-
-Create a usage API key with execute permissions:
-```bash
-curl -X POST "https://api.dev.litprotocol.com/core/v1/add_usage_api_key" \
-  -H "Content-Type: application/json" \
-  -H "X-Api-Key: YOUR-ACCOUNT-API-KEY" \
-  -d '{
-    "name": "Shard DApp",
-    "description": "For vault recovery",
-    "can_create_groups": false,
-    "can_delete_groups": false,
-    "can_create_pkps": false,
-    "execute_in_groups": [0]
-  }'
-```
-
-Response:
-```json
-{"usage_api_key": "your-usage-api-key"}
-```
-
-**Store this key securely** - it's shown only once!
-
-### Step 4: Create PKP (Wallet) for Recovery
-
-```bash
-curl "https://api.dev.litprotocol.com/core/v1/create_wallet" \
-  -H "X-Api-Key: YOUR-API-KEY"
-```
-
-Response:
-```json
-{"wallet_address": "0x...", "pkp_id": "..."}
-```
-
-### Step 5: Run Lit Actions
-
-Execute a Lit Action to handle encrypted key release:
-
-```bash
-curl -X POST "https://api.dev.litprotocol.com/core/v1/lit_action" \
-  -H "Content-Type: application/json" \
-  -H "X-Api-Key: YOUR-USAGE-API-KEY" \
-  -d '{
-    "code": "async function main({ pkpId }) { return { hello: \"world\" }; }",
-    "js_params": {}
-  }'
-```
-
-### API Endpoints Reference
-
-| Endpoint | Method | Purpose |
-|----------|--------|---------|
-| `/new_account` | POST | Create account |
-| `/account_exists` | GET | Verify account |
-| `/add_usage_api_key` | POST | Create usage key |
-| `/create_wallet` | GET | Create PKP |
-| `/list_wallets` | GET | List PKPs |
-| `/add_group` | POST | Create group |
-| `/lit_action` | POST | Execute Lit Action |
-| `/billing/balance` | GET | Check balance |
-
-Full OpenAPI spec: https://api.dev.litprotocol.com/core/v1/openapi.json
-
----
-
-## Contract Flow
-
-1. **Setup:** User creates vault → sets recovery address + inactivity → system generates fresh recovery wallet → encrypts key with Lit → uploads to Storacha → stores CID on contract → contract schedules its own check-in deadline
-
-2. **Heartbeat:** User checks in → cancels existing scheduled tx → schedules new one
-
-3. **Auto-trigger:** Scheduled tx fires automatically → `triggered = true`
-
-4. **Discovery:** Beneficiary visits app → connects wallet → sees all vaults where they are recovery address → selects triggered vault
-
-5. **Claim:** Beneficiary requests claim → Lit verifies `triggered == true` → decrypts key → beneficiary gets recovery wallet private key
-
-## User Flows
-
-### Vault Owner Flow
-1. Connect Flow wallet
-2. Click "Create Vault"
-3. Enter beneficiary address (the recovery address)
-4. Set inactivity period (e.g., 30 days)
-5. System generates recovery wallet, encrypts, stores CID
-6. Save recovery wallet address to share with beneficiary
-7. Periodically heartbeat to reset timer
-
-### Beneficiary Flow
-1. Receive vault info from vault owner (out-of-band: will, email, etc.)
-2. Visit app and connect wallet
-3. App automatically shows: "You are beneficiary of X vaults"
-4. See vault status (active/triggered)
-5. When triggered: click "Claim" to decrypt recovery key
-6. Receive recovery wallet private key
-7. Import into wallet to access funds
-
-### The Discovery Moment
-**This is what makes Shard different from other inheritance tools:**
-
-When the beneficiary connects their wallet, they IMMEDIATELY see:
-- Any vaults where their address is the recovery address
-- Current status of each vault
-- Time until trigger or trigger status
-- Clear "Claim" button when available
-
-No need to remember a special link or code. The wallet address IS the key.
 
 ## Critical Warnings
 
-1. **Naga is DEAD (April 1, 2026)** — Use Chipotle v3 only
-2. **Cadence over Solidity** — judges expect Cadence
-3. **Never upload user private keys** — system generates fresh wallets
-4. **No Zama** — FHE is wrong tool for conditional key release
+1. **Chipotle is REST API only** — no SDK, no Naga, no Datil
+2. **Naga sunset April 1, 2026** — do not use it
+3. **Recovery wallet = Lit PKP** — never generate a raw private key for this
+4. **Cadence over Solidity** — judges expect Cadence
+5. **VaultCreated event is required** — beneficiary portal doesn't work without it
+6. **Public capability is required** — auto-trigger doesn't work without it
 
-## Development Order
+---
 
-1. Flow CLI + testnet account + faucet
-2. Storacha account + w3up-client test
-3. Lit Chipotle account + fund + create usage API key
-4. Cadence contract with scheduled transactions
-5. Frontend with FCL wallet connection
-6. Beneficiary portal (wallet address discovery)
-7. End-to-end test: setup → heartbeat → trigger → claim
+## Development Order (Remaining)
 
-## Why This Wins
-
-1. **No keepers needed** — Flow's scheduled transactions are the killer feature
-2. **No key exposure** — System generates recovery wallet
-3. **Automatic beneficiary discovery** — Wallet address IS the key
-4. **Self-custodial** — No third party can freeze or access
-5. **Deep sponsor integration** — Cadence, Lit, Storacha all properly utilized
-
-## The Narrative for Judges
-
-"Your vault wakes up on its own if you stop checking in. Your beneficiary doesn't need to remember anything — they just connect their wallet and the app shows them their vaults. The blockchain handles the trust, Flow handles the automation, and Lit handles the key release. It's inheritance that actually works."
+1. Fix Cadence contract bugs (Handler capability pattern + event emission)
+2. Deploy to Flow testnet: `cd contracts/shard-vault && flow project deploy --network testnet`
+3. Write Lit Action JS file → upload to IPFS → get CID
+4. Register CID in Lit dashboard under your group
+5. Wire frontend: PKP creation on vault setup, event query on claim page
+6. Set env vars in `frontend/.env.local`
+7. End-to-end test: create → heartbeat → trigger → claim
+8. Record demo video
