@@ -1,9 +1,12 @@
 import "Shard"
 
-pub fun main(): AnyStruct {
-    let vault = Shard.account.storage.borrow<&Shard.Vault>(
-        from: /storage/shardVaults
-    ) ?? panic("Vault not found")
+pub fun main(owner: Address, vaultId: UInt64): AnyStruct {
+    let vaultOwner = Shard.account.storage.borrow<&Shard.VaultOwner>(
+        from: Shard.vaultStoragePath
+    ) ?? panic("VaultOwner not found")
+
+    let vault = vaultOwner.getVault(vaultId)
+        ?? panic("Vault not found")
 
     return {
         "id": vault.id,

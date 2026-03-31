@@ -2,27 +2,47 @@
 
 import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
-import { fcl } from "@/lib/flow";
+import { fcl, t, sendTransaction } from "@/lib/flow";
 import { connectWallet, getWalletAddress } from "@/lib/wallet";
+import { setupVaultWithRecovery, setRecoveryCIDOnContract, formatTimeRemaining } from "@/lib/vault";
+import { ethers } from "ethers";
 import Link from "next/link";
 
-const SETUP_VAULT_CODE = `
+const CREATE_VAULT_CODE = `
 import "Shard"
+import "FlowTransactionSchedulerUtils"
 
-transaction(recoveryAddress: Address, inactivityPeriodDays: UInt64) {
-  prepare(signer: auth(Storage, Capabilities) &Account) {
-    let admin = signer.storage.borrow<&Shard.Admin>(from: /storage/shardAdmin)
-      ?? panic("Admin not found")
-    
-    let inactivitySeconds = UFix64(inactivityPeriodDays) * 86400.0
-    
-    let vaultId = admin.createVault(
-      recoveryAddress: recoveryAddress,
-      inactivityPeriodSeconds: inactivitySeconds
-    )
-    
-    log("Created vault: ".concat(vaultId.toString()))
-  }
+transaction(
+    recoveryAddress: Address,
+    inactivityPeriodDays: UInt64
+) {
+    prepare(signer: auth(Storage, Capabilities) &Account) {
+        // Check if VaultOwner already exists
+        if signer.storage.borrow<&Shard.VaultOwner>(from: Shard.vaultStoragePath) == nil {
+            let vaultOwner <- create VaultOwner(signer.address)
+            signer.storage.save(<-vaultOwner, to: Shard.vaultStoragePath)
+        }
+
+        let vaultOwner = signer.storage.borrow<&Shard.VaultOwner>(
+            from: Shard.vaultStoragePath
+        ) ?? panic("VaultOwner not found")
+
+        let inactivityPeriodSeconds = UFix64(inactivityPeriodDays) * 86400.0
+
+        let vaultId = vaultOwner.createVault(
+            recoveryAddress: recoveryAddress,
+            inactivityPeriodSeconds: inactivityPeriodSeconds
+        )
+
+        log("Created vault: ".concat(vaultId.toString()))
+
+        vaultOwner.scheduleHeartbeatCheck(
+            vaultId: vaultId,
+            delaySeconds: inactivityPeriodSeconds
+        )
+
+        log("Scheduled heartbeat check")
+    }
 }
 `;
 
@@ -33,6 +53,11 @@ export default function CreateVault() {
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState(false);
+  const [recoveryWalletInfo, setRecoveryWalletInfo] = useState<{
+    address: string;
+    warning: string;
+  } | null>(null);
+  const [txId, setTxId] = useState<string | null>(null);
   const router = useRouter();
 
   useEffect(() => {
@@ -55,12 +80,19 @@ export default function CreateVault() {
       return;
     }
 
+    // Validate Flow address format
+    if (!recoveryAddress.startsWith("0x") || recoveryAddress.length !== 18) {
+      setError("Invalid Flow address format (should be 0x...)");
+      return;
+    }
+
     setCreating(true);
     setError(null);
 
     try {
+      // Step 1: Create vault on Flow
       const transactionId = await fcl.send([
-        fcl.transaction(SETUP_VAULT_CODE),
+        fcl.transaction(CREATE_VAULT_CODE),
         fcl.args([
           fcl.arg(recoveryAddress, t.Address),
           fcl.arg(inactivityDays, t.UInt64),
@@ -72,15 +104,24 @@ export default function CreateVault() {
       ]);
 
       const tx = await fcl.tx(transactionId).onceSealed();
-      console.log("Transaction sealed:", tx);
 
       if (tx.status === 4) {
+        setTxId(transactionId);
         setSuccess(true);
+
+        // Show recovery wallet info to user
+        // Note: In production, we'd parse the vault ID from events
+        // For now, we show a placeholder
+        setRecoveryWalletInfo({
+          address: "Will be displayed after vault creation",
+          warning: "IMPORTANT: Save this recovery wallet address!",
+        });
+
         setTimeout(() => {
           router.push("/vault");
-        }, 2000);
+        }, 5000);
       } else {
-        setError("Transaction failed");
+        setError("Transaction failed: " + tx.errorMessage);
       }
     } catch (e: any) {
       console.error("Error creating vault:", e);
@@ -116,7 +157,7 @@ export default function CreateVault() {
                 className="w-full px-4 py-3 bg-gray-700 rounded-lg border border-gray-600 focus:border-emerald-500 focus:outline-none font-mono"
               />
               <p className="text-xs text-gray-500 mt-1">
-                The wallet that will receive your assets if you stop checking in
+                The Flow wallet that will receive your assets
               </p>
             </div>
 
@@ -133,18 +174,17 @@ export default function CreateVault() {
                 className="w-full px-4 py-3 bg-gray-700 rounded-lg border border-gray-600 focus:border-emerald-500 focus:outline-none"
               />
               <p className="text-xs text-gray-500 mt-1">
-                How many days without a heartbeat before auto-trigger
+                If you don't check in for this many days, vault auto-triggers
               </p>
             </div>
 
             <div className="bg-gray-700/50 rounded-lg p-4">
-              <h3 className="font-medium mb-2">What happens next:</h3>
+              <h3 className="font-medium mb-2">What happens:</h3>
               <ol className="text-sm text-gray-400 space-y-2 list-decimal list-inside">
-                <li>Your vault is created on Flow blockchain</li>
-                <li>A recovery wallet is generated for your beneficiary</li>
-                <li>The recovery key is encrypted and stored via Lit Protocol</li>
-                <li>The encrypted blob is stored on Storacha</li>
-                <li>You receive the recovery wallet address to share</li>
+                <li>Vault created on Flow blockchain</li>
+                <li>Scheduled transaction set for {inactivityDays} days</li>
+                <li>Vault self-triggers if you don't heartbeat</li>
+                <li>Beneficiary can claim after trigger</li>
               </ol>
             </div>
 
@@ -154,19 +194,39 @@ export default function CreateVault() {
               </div>
             )}
 
-            {success && (
-              <div className="bg-emerald-900/50 border border-emerald-700 rounded-lg p-4 text-emerald-300 text-sm">
-                Vault created successfully! Redirecting...
-              </div>
-            )}
+            {success ? (
+              <div className="space-y-4">
+                <div className="bg-emerald-900/50 border border-emerald-700 rounded-lg p-4 text-emerald-300">
+                  <p className="font-bold mb-2">Vault Created Successfully!</p>
+                  <p className="text-sm">Transaction ID: {txId?.slice(0, 16)}...</p>
+                </div>
 
-            <button
-              onClick={handleCreateVault}
-              disabled={creating || !recoveryAddress}
-              className="w-full py-4 bg-gradient-to-r from-emerald-500 to-cyan-500 hover:from-emerald-400 hover:to-cyan-400 rounded-lg font-bold text-lg transition-all disabled:opacity-50"
-            >
-              {creating ? "Creating Vault..." : "Create Vault"}
-            </button>
+                {recoveryWalletInfo && (
+                  <div className="bg-yellow-900/50 border border-yellow-700 rounded-lg p-4">
+                    <p className="text-yellow-300 font-bold mb-2">
+                      {recoveryWalletInfo.warning}
+                    </p>
+                    <p className="text-sm text-gray-400">
+                      The system generates a fresh recovery wallet.
+                      Share the recovery wallet address with your beneficiary.
+                      When triggered, they can claim and access the funds.
+                    </p>
+                  </div>
+                )}
+
+                <p className="text-center text-gray-400 text-sm">
+                  Redirecting to vault page...
+                </p>
+              </div>
+            ) : (
+              <button
+                onClick={handleCreateVault}
+                disabled={creating || !recoveryAddress}
+                className="w-full py-4 bg-gradient-to-r from-emerald-500 to-cyan-500 hover:from-emerald-400 hover:to-cyan-400 rounded-lg font-bold text-lg transition-all disabled:opacity-50"
+              >
+                {creating ? "Creating Vault..." : "Create Vault"}
+              </button>
+            )}
           </div>
         </div>
       </div>

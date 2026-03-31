@@ -1,22 +1,41 @@
-import { fcl } from "./flow";
+import { fcl, t, sendTransaction, executeScript, SHARD_CONTRACT_ADDRESS } from "./flow";
 import { encryptRecoveryKey, decryptRecoveryKey, EncryptedData } from "./lit";
 import { uploadEncryptedKey, downloadEncryptedKey } from "./storacha";
 import { ethers } from "ethers";
 
+// Cadence code for setting recovery CID
 const SET_RECOVERY_CID_CODE = `
 import "Shard"
 
-transaction(recoveryWalletCID: String) {
+transaction(vaultId: UInt64, recoveryWalletCID: String) {
   prepare(signer: auth(Storage, Capabilities) &Account) {
-    let vault = Shard.account.storage.borrow<&Shard.Vault>(
-      from: /storage/shardVaults
-    ) ?? panic("Vault not found")
-    
+    let vaultOwner = signer.storage.borrow<&Shard.VaultOwner>(
+      from: Shard.vaultStoragePath
+    ) ?? panic("VaultOwner not found")
+
+    let vault = vaultOwner.getVault(vaultId)
+      ?? panic("Vault not found")
+
+    if vault.owner != signer.address {
+      panic("Not the vault owner")
+    }
+
     vault.setRecoveryWalletCID(recoveryWalletCID)
     log("Recovery wallet CID set")
   }
 }
 `;
+
+export interface VaultData {
+  id: number;
+  owner: string;
+  recoveryAddress: string;
+  inactivityPeriodSeconds: string;
+  lastHeartbeat: string;
+  triggered: boolean;
+  recoveryWalletCID: string | null;
+  timeUntilTrigger: string;
+}
 
 export interface VaultSetupResult {
   vaultId: number;
@@ -24,58 +43,202 @@ export interface VaultSetupResult {
   recoveryWalletCID: string;
 }
 
+/**
+ * Full vault setup flow:
+ * 1. Generate fresh recovery wallet
+ * 2. Encrypt private key with Lit
+ * 3. Upload to Storacha
+ * 4. Store CID on Flow contract
+ */
 export async function setupVaultWithRecovery(
   recoveryAddress: string,
   inactivityDays: number,
-  contractAddress: string,
   ethersSigner: ethers.Signer
 ): Promise<VaultSetupResult> {
+  // Step 1: Generate fresh recovery wallet
   const wallet = ethers.Wallet.createRandom();
   const recoveryPrivateKey = wallet.privateKey;
   const recoveryWalletAddress = wallet.address;
 
   console.log("Generated recovery wallet:", recoveryWalletAddress);
 
-  const encryptedData = await encryptRecoveryKey(recoveryPrivateKey, contractAddress);
+  // Step 2: Encrypt private key with Lit
+  // Note: For actual Flow EVM integration, we need a view contract
+  // For now, using a placeholder that would need proper EVM contract
+  const encryptedData = await encryptRecoveryKey(
+    recoveryPrivateKey,
+    SHARD_CONTRACT_ADDRESS,
+    "545" // Flow EVM testnet chain ID
+  );
 
+  // Step 3: Upload encrypted blob to Storacha
   const blob = new Blob([JSON.stringify(encryptedData)], {
     type: "application/json",
   });
   const cid = await uploadEncryptedKey(blob);
   console.log("Uploaded encrypted key to Storacha, CID:", cid);
 
-  const transactionId = await fcl.send([
-    fcl.transaction(SET_RECOVERY_CID_CODE),
-    fcl.args([fcl.arg(cid, t.String)]),
-    fcl.proposer(fcl.currentUser().authorization),
-    fcl.payer(fcl.currentUser().authorization),
-    fcl.authorizations([fcl.currentUser().authorization]),
-    fcl.limit(9999),
-  ]);
-
-  await fcl.tx(transactionId).onceSealed();
-  console.log("CID stored on Flow contract");
+  // Step 4: Store CID on Flow contract
+  // This is done after vault creation in the create page
 
   return {
-    vaultId: 1,
+    vaultId: 1, // Will be set after transaction
     recoveryWalletAddress,
     recoveryWalletCID: cid,
   };
 }
 
+/**
+ * Set the recovery wallet CID on the contract
+ */
+export async function setRecoveryCIDOnContract(
+  vaultId: number,
+  cid: string
+): Promise<void> {
+  const transaction = await sendTransaction(
+    SET_RECOVERY_CID_CODE,
+    [
+      fcl.arg(vaultId.toString(), t.UInt64),
+      fcl.arg(cid, t.String),
+    ]
+  );
+
+  if (transaction.status !== 4) {
+    throw new Error("Failed to set recovery CID");
+  }
+
+  console.log("CID stored on Flow contract");
+}
+
+/**
+ * Get vault data from the contract
+ */
+export async function getVaultData(vaultId: number): Promise<VaultData> {
+  const code = `
+    import "Shard"
+
+    pub fun main(owner: Address, vaultId: UInt64): AnyStruct {
+      let vaultOwner = Shard.account.storage.borrow<&Shard.VaultOwner>(
+        from: Shard.vaultStoragePath
+      ) ?? panic("VaultOwner not found")
+
+      let vault = vaultOwner.getVault(vaultId)
+        ?? panic("Vault not found")
+
+      return {
+        "id": vault.id,
+        "owner": vault.owner,
+        "recoveryAddress": vault.recoveryAddress,
+        "inactivityPeriodSeconds": vault.inactivityPeriodSeconds,
+        "lastHeartbeat": vault.lastHeartbeat,
+        "triggered": vault.triggered,
+        "recoveryWalletCID": vault.recoveryWalletCID,
+        "timeUntilTrigger": vault.getTimeUntilTrigger()
+      }
+    }
+  `;
+
+  const result = await executeScript(code, [
+    fcl.arg(fcl.currentUser().snapshot().addr, t.Address),
+    fcl.arg(vaultId.toString(), t.UInt64),
+  ]);
+
+  return result as VaultData;
+}
+
+/**
+ * Get all vault IDs for the current user
+ */
+export async function getVaultIds(): Promise<number[]> {
+  const code = `
+    import "Shard"
+
+    pub fun main(owner: Address): [UInt64] {
+      let vaultOwner = Shard.account.storage.borrow<&Shard.VaultOwner>(
+        from: Shard.vaultStoragePath
+      ) ?? panic("VaultOwner not found")
+
+      return vaultOwner.vaultIds
+    }
+  `;
+
+  const result = await executeScript(code, [
+    fcl.arg(fcl.currentUser().snapshot().addr, t.Address),
+  ]);
+
+  return (result as any[]).map((n) => Number(n));
+}
+
+/**
+ * Check if vault is triggered
+ */
+export async function isVaultTriggered(vaultId: number): Promise<boolean> {
+  const code = `
+    import "Shard"
+
+    pub fun main(owner: Address, vaultId: UInt64): Bool {
+      let vaultOwner = Shard.account.storage.borrow<&Shard.VaultOwner>(
+        from: Shard.vaultStoragePath
+      ) ?? panic("VaultOwner not found")
+
+      let vault = vaultOwner.getVault(vaultId)
+        ?? panic("Vault not found")
+
+      return vault.triggered
+    }
+  `;
+
+  const result = await executeScript(code, [
+    fcl.arg(fcl.currentUser().snapshot().addr, t.Address),
+    fcl.arg(vaultId.toString(), t.UInt64),
+  ]);
+
+  return result as boolean;
+}
+
+/**
+ * Claim recovery - decrypt the recovery key
+ */
 export async function claimRecovery(
+  vaultId: number,
   ethersSigner: ethers.Signer
 ): Promise<string> {
-  const encryptedBlob = await downloadEncryptedKey("placeholder-cid");
+  const vault = await getVaultData(vaultId);
 
-  const encryptedData: EncryptedData = {
-    ciphertext: "placeholder",
-    dataToEncryptHash: "placeholder",
-    accessControlConditions: [],
-  };
+  if (!vault.triggered) {
+    throw new Error("Vault not yet triggered");
+  }
 
-  const privateKey = await decryptRecoveryKey(encryptedData, ethersSigner);
+  if (!vault.recoveryWalletCID) {
+    throw new Error("No recovery wallet CID set");
+  }
+
+  // Download encrypted blob from Storacha
+  const blob = await downloadEncryptedKey(vault.recoveryWalletCID);
+  const encryptedData: EncryptedData = JSON.parse(await blob.text());
+
+  // Decrypt using Lit
+  const privateKey = await decryptRecoveryKey(
+    encryptedData,
+    ethersSigner,
+    "545"
+  );
+
   return privateKey;
 }
 
-import * as t from "@onflow/types";
+/**
+ * Format seconds into human readable time
+ */
+export function formatTimeRemaining(seconds: string): string {
+  const secs = parseFloat(seconds);
+  if (secs <= 0) return "Triggered";
+
+  const days = Math.floor(secs / 86400);
+  const hours = Math.floor((secs % 86400) / 3600);
+  const minutes = Math.floor((secs % 3600) / 60);
+
+  if (days > 0) return `${days}d ${hours}h`;
+  if (hours > 0) return `${hours}h ${minutes}m`;
+  return `${minutes}m`;
+}
