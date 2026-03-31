@@ -4,56 +4,56 @@
 
 - [ ] Working end-to-end demo (video)
 - [ ] Deployed on Flow testnet
-- [ ] Cadence contract using scheduled transactions
+- [x] Cadence contract using scheduled transactions
 - [ ] Lit encryption working with nagaDev
 - [ ] Storacha upload returning CID
-- [ ] Clear narrative: "your vault wakes up on its own"
+- [x] Clear narrative: "your vault wakes up on its own"
 
 ## Core Features
 
-### 1. Flow Cadence Contract (`contracts/cadence/Shard.cdc`)
+### 1. Flow Cadence Contract
 
-- [x] Vault resource with all required fields (id, owner, recoveryAddress, inactivityPeriodSeconds, lastHeartbeat, triggered, recoveryWalletCID, scheduledTxID)
+- [x] VaultOwner resource (supports multiple vaults per account)
+- [x] Vault resource with all required fields
 - [x] Scheduled transaction handler for auto-trigger
-- [x] Admin resource for vault management
+- [x] Admin functionality through VaultOwner
 - [x] `createVault()` - creates vault and schedules first check-in
 - [x] `heartbeat()` - cancels old tx, schedules new one
 - [x] `trigger()` - called by scheduled tx when deadline passes
 - [x] `setRecoveryWalletCID()` - stores encrypted key CID
 - [x] `getTimeUntilTrigger()` - calculates remaining time
-- [ ] Multiple vaults per account support (currently broken - fixed storage path)
-- [ ] Proper scheduled tx ID tracking and cancellation
+- [x] Proper scheduled tx ID tracking and cancellation
 
-### 2. Lit Protocol Integration (`frontend/src/lib/lit.ts`)
+### 2. Lit Protocol Integration
 
 - [x] Initialize Lit client with nagaDev network
-- [x] `encryptRecoveryKey()` with access control conditions
+- [x] `encryptRecoveryKey()` with EVM access control conditions
 - [x] `decryptRecoveryKey()` when condition met
-- [ ] Correct access condition for Flow contract (currently using wrong ABI/chain)
-- [ ] Test with actual Flow EVM contract address
+- [x] Correct EVM contract condition structure
+- [ ] **NEEDS TESTING** with actual Flow EVM contract
 
-### 3. Storacha Integration (`frontend/src/lib/storacha.ts`)
+### 3. Storacha Integration
 
 - [x] Initialize w3up-client
 - [x] `uploadEncryptedKey()` - uploads blob, returns CID
 - [x] `downloadEncryptedKey()` - retrieves blob by CID
-- [ ] Email registration flow
-- [ ] Space creation verification
+- [ ] Email registration flow (can use free tier without)
+- [ ] Upload confirmation UX
 
 ### 4. Frontend Pages
 
 #### Landing Page (`/`)
 - [x] Wallet connection with FCL
 - [x] Navigation to Create Vault, My Vaults, Claim
-- [x] Feature highlights (No Keepers, Key Protection, Self-Custodial)
+- [x] Feature highlights
 
 #### Create Vault (`/create`)
 - [x] Recovery address input
 - [x] Inactivity period input
-- [ ] **Generate fresh recovery wallet (MISSING)**
-- [ ] **Encrypt recovery key with Lit (MISSING)**
-- [ ] **Upload to Storacha (MISSING)**
-- [ ] **Store CID on contract (currently placeholder)**
+- [ ] **Recovery wallet generation (needs ethers wallet)**
+- [ ] **Encrypt recovery key with Lit (wired but untested)**
+- [ ] **Upload to Storacha (wired but untested)**
+- [ ] **Store CID on contract (needs vault ID extraction)**
 - [ ] Display recovery wallet address to user
 
 #### My Vault (`/vault`)
@@ -62,67 +62,55 @@
 - [x] Display inactivity period
 - [x] Display time until trigger (countdown)
 - [x] Heartbeat button
-- [ ] **Reschedule tx after heartbeat (currently not working)**
-- [ ] Display recovery wallet CID
-- [ ] **Display recovery wallet address to user (MISSING)**
+- [x] Multiple vault support
+- [x] Auto-refresh every 30 seconds
 
 #### Claim (`/claim`)
-- [ ] Check if connected wallet is beneficiary
-- [ ] Verify vault is triggered
-- [ ] **Decrypt recovery key using Lit**
+- [x] Check if connected wallet is beneficiary
+- [x] Verify vault is triggered
+- [ ] **Decrypt recovery key using Lit (wired but untested)**
 - [ ] **Display recovery wallet private key to beneficiary**
 - [ ] Clear UX explaining what to do with key
 
-## Technical Issues to Fix
+## Installation & Setup
 
-### Critical (Must Fix)
+### DONE - Dependencies installed:
+```bash
+cd frontend
+npm install
+```
 
-1. **Multiple Vaults Per Account**
-   - Current: Uses fixed storage path `/storage/shardVaults`
-   - Fix: Use account storage with vault ID as key, or separate paths per vault
+### Dependencies:
+- `@onflow/fcl` - Flow wallet connection
+- `@onflow/types` - Flow type definitions
+- `@lit-protocol/lit-node-client` v8 - Lit Protocol encryption
+- `@web3-storage/w3up-client` - Storacha storage
+- `ethers` v6 - Ethereum utilities (for wallet generation)
+- `next` - React framework
+- `react` - UI library
+- `tailwindcss` - Styling
 
-2. **Scheduled Transaction ID Tracking**
-   - Current: `scheduledTxID` is never set
-   - Fix: Capture and store tx ID from `manager.schedule()`
-
-3. **Heartbeat Cancellation**
-   - Current: Tries to use `vault.scheduledTxID` which is always nil
-   - Fix: Store tx ID on schedule, use it on heartbeat
-
-4. **Lit Access Condition**
-   - Current: Using `functionName: "triggered"` but it's a field
-   - Fix: Use proper EVM contract call condition or change to method
-
-5. **Recovery Wallet Generation**
-   - Current: Placeholder only
-   - Fix: Generate fresh wallet with ethers, encrypt private key
-
-### Important (Should Fix)
-
-6. **Admin Owner Reference**
-   - Current: `self.owner` in Admin but Admin has no owner field
-   - Fix: Use `signer.address` in transaction instead
-
-7. **Handler Vault Lookup**
-   - Current: Hardcoded to single vault
-   - Fix: Pass vault ID in transaction data or store per-user handler
-
-8. **Flow EVM vs Ethereum for Lit**
-   - Current: Using "ethereum" chain
-   - Fix: Use Flow EVM chain (chain ID 545 for testnet)
+### Environment Variables:
+Create `.env.local` in frontend folder:
+```env
+NEXT_PUBLIC_FLOW_NETWORK=testnet
+NEXT_PUBLIC_FLOW_ADDRESS=ec3c1566d2b4bb6c
+NEXT_PUBLIC_LIT_NETWORK=nagaDev
+```
 
 ## Sponsor Integration Points
 
 ### Flow ($10,000)
 - [x] Cadence contract
 - [x] Scheduled transactions (Forte feature)
-- [ ] Deep integration - using Cadence-native features
+- [x] VaultOwner pattern for multiple vaults
+- [ ] Deep integration demo
 - [ ] Clear demo of self-triggering
 
 ### Lit Protocol
 - [x] Encryption/decryption
-- [x] Access control conditions
-- [ ] Using access conditions properly (fix ABI)
+- [x] EVM access control conditions
+- [ ] Using access conditions properly with Flow EVM
 - [ ] Demonstrating conditional key release
 
 ### Storacha
@@ -145,7 +133,7 @@
 ## Submission Checklist
 
 - [ ] Contract deployed to Flow testnet
-- [ ] Frontend deployed (Vercel/Netlify)
+- [ ] Frontend runs locally (npm run dev)
 - [ ] Demo video recorded and uploaded
 - [ ] GitHub repo cleaned and public
 - [ ] README updated with instructions
@@ -156,45 +144,61 @@
 ```
 pl-genesis/
 ├── contracts/
-│   └── cadence/
-│       ├── contracts/
-│       │   └── Shard.cdc          # Main contract (needs fixes)
-│       ├── transactions/
-│       │   ├── setup_vault.cdc
-│       │   ├── heartbeat.cdc
-│       │   └── set_recovery_cid.cdc
-│       └── scripts/
-│           ├── get_vault.cdc
-│           └── is_triggered.cdc
-├── frontend/
+│   └── shard-vault/              # Flow project (READY TO DEPLOY)
+│       ├── cadence/
+│       │   ├── contracts/Shard.cdc
+│       │   ├── transactions/
+│       │   └── scripts/
+│       └── flow.json
+├── frontend/                       # Next.js app (NEEDS npm install)
 │   ├── src/
 │   │   ├── app/
 │   │   │   ├── page.tsx          # Landing
-│   │   │   ├── create/page.tsx   # Create vault (needs recovery gen)
+│   │   │   ├── create/page.tsx   # Create vault
 │   │   │   ├── vault/page.tsx    # My vault
 │   │   │   └── claim/page.tsx    # Claim recovery
 │   │   └── lib/
 │   │       ├── flow.ts           # FCL config
 │   │       ├── wallet.ts         # Wallet connection
-│   │       ├── lit.ts            # Lit integration (needs fix)
+│   │       ├── lit.ts            # Lit v8 integration
 │   │       ├── storacha.ts       # Storacha integration
 │   │       └── vault.ts          # Vault service
+│   ├── .env.example
 │   └── package.json
-├── canvas/
-│   ├── shard-architecture.html
-│   └── shard-swimlane.html
+├── canvas/                        # Diagrams
 ├── resources/
-│   ├── SHARD.md                  # Main doc
-│   └── CHECKLIST.md              # This file
+│   ├── SHARD.md
+│   └── CHECKLIST.md
 └── README.md
 ```
 
 ## Priority Order for Remaining Work
 
-1. Fix Cadence contract (multiple vaults, tx ID tracking)
-2. Fix Lit access condition (correct ABI)
-3. Add recovery wallet generation to frontend
-4. Wire up complete create vault flow
-5. Test end-to-end on testnet
-6. Record demo video
-7. Submit
+1. [ ] Deploy Shard contract to testnet: `cd contracts/shard-vault && flow project deploy --network testnet`
+2. [ ] Run frontend: `cd frontend && npm install && npm run dev`
+3. [ ] Test vault creation flow
+4. [ ] Test heartbeat (need short inactivity period for demo)
+5. [ ] Test recovery wallet generation
+6. [ ] Test Lit encryption (need EVM view contract)
+7. [ ] Test Storacha upload
+8. [ ] Record demo video
+9. [ ] Submit
+
+## Critical Notes
+
+- **Datil is DEAD** - Use nagaDev + v8 SDK only
+- **Lit v8 API changed** - Uses `client.encrypt()` not standalone functions
+- **Flow EVM for Lit** - Lit checks EVM contracts, need view function on Flow EVM
+- **Cadence not Solidity** - Judges expect Cadence
+
+## Hackathon Deadline
+
+**March 31, 2026 (TODAY!)**
+
+## Network Endpoints
+
+- Flow Testnet REST: `https://rest-testnet.onflow.org`
+- Flow Testnet Access: `access-testnet.onflow.org:9000`
+- Flow EVM Testnet: `https://testnet.evm.nodes.onflow.org` (chain ID: 545)
+- Lit NagaDev: `nagaDev` (free, no tokens)
+- Storacha: `https://console.storacha.network`

@@ -3,29 +3,6 @@ import { encryptRecoveryKey, decryptRecoveryKey, EncryptedData } from "./lit";
 import { uploadEncryptedKey, downloadEncryptedKey } from "./storacha";
 import { ethers } from "ethers";
 
-// Cadence code for setting recovery CID
-const SET_RECOVERY_CID_CODE = `
-import "Shard"
-
-transaction(vaultId: UInt64, recoveryWalletCID: String) {
-  prepare(signer: auth(Storage, Capabilities) &Account) {
-    let vaultOwner = signer.storage.borrow<&Shard.VaultOwner>(
-      from: Shard.vaultStoragePath
-    ) ?? panic("VaultOwner not found")
-
-    let vault = vaultOwner.getVault(vaultId)
-      ?? panic("Vault not found")
-
-    if vault.owner != signer.address {
-      panic("Not the vault owner")
-    }
-
-    vault.setRecoveryWalletCID(recoveryWalletCID)
-    log("Recovery wallet CID set")
-  }
-}
-`;
-
 export interface VaultData {
   id: number;
   owner: string;
@@ -63,8 +40,6 @@ export async function setupVaultWithRecovery(
   console.log("Generated recovery wallet:", recoveryWalletAddress);
 
   // Step 2: Encrypt private key with Lit
-  // Note: For actual Flow EVM integration, we need a view contract
-  // For now, using a placeholder that would need proper EVM contract
   const encryptedData = await encryptRecoveryKey(
     recoveryPrivateKey,
     SHARD_CONTRACT_ADDRESS,
@@ -77,9 +52,6 @@ export async function setupVaultWithRecovery(
   });
   const cid = await uploadEncryptedKey(blob);
   console.log("Uploaded encrypted key to Storacha, CID:", cid);
-
-  // Step 4: Store CID on Flow contract
-  // This is done after vault creation in the create page
 
   return {
     vaultId: 1, // Will be set after transaction
@@ -95,6 +67,28 @@ export async function setRecoveryCIDOnContract(
   vaultId: number,
   cid: string
 ): Promise<void> {
+  const SET_RECOVERY_CID_CODE = `
+    import "Shard"
+
+    transaction(vaultId: UInt64, recoveryWalletCID: String) {
+      prepare(signer: auth(Storage, Capabilities) &Account) {
+        let vaultOwner = signer.storage.borrow<&Shard.VaultOwner>(
+          from: Shard.vaultStoragePath
+        ) ?? panic("VaultOwner not found")
+
+        let vault = vaultOwner.getVault(vaultId)
+          ?? panic("Vault not found")
+
+        if vault.owner != signer.address {
+          panic("Not the vault owner")
+        }
+
+        vault.setRecoveryWalletCID(recoveryWalletCID)
+        log("Recovery wallet CID set")
+      }
+    }
+  `;
+
   const transaction = await sendTransaction(
     SET_RECOVERY_CID_CODE,
     [
@@ -220,8 +214,7 @@ export async function claimRecovery(
   // Decrypt using Lit
   const privateKey = await decryptRecoveryKey(
     encryptedData,
-    ethersSigner,
-    "545"
+    ethersSigner
   );
 
   return privateKey;
