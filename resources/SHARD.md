@@ -59,7 +59,7 @@ Our app provides the Beneficiary Portal as the on-chain discovery mechanism, but
 | Component | Technology | Purpose |
 |-----------|------------|---------|
 | Smart Contracts | Flow Cadence | Vault logic + scheduled transactions |
-| Encryption | Lit Protocol v8 (Naga) | Conditional secret release |
+| Encryption | Lit Protocol v3 (Chipotle) | Conditional secret release |
 | Storage | Storacha | Encrypted key blob with CID |
 | Frontend | Next.js + FCL | User wallet connection |
 
@@ -69,9 +69,122 @@ Our app provides the Beneficiary Portal as the on-chain discovery mechanism, but
 |---------|----------|-------|
 | **Flow ($10k)** | Critical | Cadence + scheduled transactions (Forte) |
 | **Storacha** | Critical | w3up-client for encrypted blob |
-| **Lit Protocol** | Critical | v8 Naga for conditional decrypt |
+| **Lit Protocol** | Critical | v3 Chipotle for conditional decrypt |
 | **Fresh Code ($50k)** | High | Novel keeper-less inheritance |
 | **Infrastructure & Digital Rights** | Medium | Wallet recovery theme |
+
+---
+
+## Lit Protocol Chipotle (v3) Setup
+
+**Chipotle** is Lit's new v3 network - REST API based, no SDK required.
+
+### Important: Network Migration
+
+- **Naga (v1) sunset:** April 1, 2026
+- **Chipotle (v3) is production:** Live since March 25, 2026
+- **Datil is dead** - Do NOT use
+
+### Step 1: Create Account
+
+1. Go to https://dashboard.dev.litprotocol.com
+2. Sign up for a new account
+3. You'll receive an API key
+
+Or via API:
+```bash
+curl -X POST "https://api.dev.litprotocol.com/core/v1/new_account" \
+  -H "Content-Type: application/json" \
+  -d '{"account_name":"Shard","account_description":"Vault recovery","email":"you@example.com"}'
+```
+
+Response:
+```json
+{"api_key": "your-api-key", "wallet_address": "0x..."}
+```
+
+### Step 2: Add Funds
+
+1. Go to https://dashboard.dev.litprotocol.com/dapps/dashboard/
+2. Click "Add Funds"
+3. Pay with credit card (minimum $5)
+
+Or via API:
+```bash
+# Get Stripe config
+curl "https://api.dev.litprotocol.com/core/v1/billing/stripe_config"
+
+# Check balance
+curl "https://api.dev.litprotocol.com/core/v1/billing/balance" \
+  -H "X-Api-Key: YOUR-API-KEY"
+```
+
+### Step 3: Create Usage API Key
+
+Create a usage API key with execute permissions:
+```bash
+curl -X POST "https://api.dev.litprotocol.com/core/v1/add_usage_api_key" \
+  -H "Content-Type: application/json" \
+  -H "X-Api-Key: YOUR-ACCOUNT-API-KEY" \
+  -d '{
+    "name": "Shard DApp",
+    "description": "For vault recovery",
+    "can_create_groups": false,
+    "can_delete_groups": false,
+    "can_create_pkps": false,
+    "execute_in_groups": [0]
+  }'
+```
+
+Response:
+```json
+{"usage_api_key": "your-usage-api-key"}
+```
+
+**Store this key securely** - it's shown only once!
+
+### Step 4: Create PKP (Wallet) for Recovery
+
+```bash
+curl "https://api.dev.litprotocol.com/core/v1/create_wallet" \
+  -H "X-Api-Key: YOUR-API-KEY"
+```
+
+Response:
+```json
+{"wallet_address": "0x...", "pkp_id": "..."}
+```
+
+### Step 5: Run Lit Actions
+
+Execute a Lit Action to handle encrypted key release:
+
+```bash
+curl -X POST "https://api.dev.litprotocol.com/core/v1/lit_action" \
+  -H "Content-Type: application/json" \
+  -H "X-Api-Key: YOUR-USAGE-API-KEY" \
+  -d '{
+    "code": "async function main({ pkpId }) { return { hello: \"world\" }; }",
+    "js_params": {}
+  }'
+```
+
+### API Endpoints Reference
+
+| Endpoint | Method | Purpose |
+|----------|--------|---------|
+| `/new_account` | POST | Create account |
+| `/account_exists` | GET | Verify account |
+| `/add_usage_api_key` | POST | Create usage key |
+| `/create_wallet` | GET | Create PKP |
+| `/list_wallets` | GET | List PKPs |
+| `/add_group` | POST | Create group |
+| `/lit_action` | POST | Execute Lit Action |
+| `/billing/balance` | GET | Check balance |
+
+Full OpenAPI spec: https://api.dev.litprotocol.com/core/v1/openapi.json
+
+---
 
 ## Contract Flow
 
@@ -116,50 +229,9 @@ When the beneficiary connects their wallet, they IMMEDIATELY see:
 
 No need to remember a special link or code. The wallet address IS the key.
 
-## Flow: Setup
-
-```bash
-brew install flow-cli
-flow init
-flow accounts create
-```
-
-**Faucet:** https://faucet.flow.com/create-account → 100k testnet FLOW
-
-**Networks:**
-- Cadence: Flow testnet
-- EVM (optional): https://testnet.evm.nodes.onflow.org, Chain ID: 545
-
-## Lit: Setup
-
-```bash
-npm i @lit-protocol/lit-node-client
-```
-
-**⚠️ CRITICAL:** Datil (V0) shut down Feb 25, 2026. Use `nagaDev` with v8 SDK only.
-
-- Network: `nagaDev` (free, no tokens)
-- Wallet: MetaMask (signs AuthSig)
-
-## Storacha: Setup
-
-```bash
-npm i @web3-storage/w3up-client
-```
-
-Sign up: https://console.storacha.network (free tier)
-
-## Frontend: Setup
-
-```bash
-npm i @onflow/fcl @onflow/react-sdk
-```
-
-Users connect with Flow Wallet / Blocto / Lilico.
-
 ## Critical Warnings
 
-1. **Datil is DEAD** — use nagaDev + v8 SDK
+1. **Naga is DEAD (April 1, 2026)** — Use Chipotle v3 only
 2. **Cadence over Solidity** — judges expect Cadence
 3. **Never upload user private keys** — system generates fresh wallets
 4. **No Zama** — FHE is wrong tool for conditional key release
@@ -168,7 +240,7 @@ Users connect with Flow Wallet / Blocto / Lilico.
 
 1. Flow CLI + testnet account + faucet
 2. Storacha account + w3up-client test
-3. Lit v8 + nagaDev connection
+3. Lit Chipotle account + fund + create usage API key
 4. Cadence contract with scheduled transactions
 5. Frontend with FCL wallet connection
 6. Beneficiary portal (wallet address discovery)

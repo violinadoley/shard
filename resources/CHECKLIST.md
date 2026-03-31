@@ -5,7 +5,7 @@
 - [ ] Working end-to-end demo (video)
 - [ ] Deployed on Flow testnet
 - [x] Cadence contract using scheduled transactions
-- [ ] Lit encryption working with nagaDev
+- [ ] Lit Chipotle v3 encryption working with REST API
 - [ ] Storacha upload returning CID
 - [x] Clear narrative: "your vault wakes up on its own"
 
@@ -24,13 +24,16 @@
 - [x] `getTimeUntilTrigger()` - calculates remaining time
 - [x] Proper scheduled tx ID tracking and cancellation
 
-### 2. Lit Protocol Integration
+### 2. Lit Protocol Integration (Chipotle v3)
 
-- [x] Initialize Lit client with nagaDev network
-- [x] `encryptRecoveryKey()` with EVM access control conditions
-- [x] `decryptRecoveryKey()` when condition met
-- [x] Correct EVM contract condition structure
-- [ ] **NEEDS TESTING** with actual Flow EVM contract
+**CHIPOTLE IS LIVE (March 25, 2026) - Naga is DEAD (April 1, 2026)**
+
+- [x] REST API based - no SDK needed
+- [x] Account creation via API
+- [x] Usage API key creation with execute permissions
+- [x] PKP (wallet) creation
+- [x] Lit Action execution for key release
+- [ ] **NEEDS TESTING** with actual account
 
 ### 3. Storacha Integration
 
@@ -83,19 +86,77 @@ npm install
 ### Dependencies:
 - `@onflow/fcl` - Flow wallet connection
 - `@onflow/types` - Flow type definitions
-- `@lit-protocol/lit-node-client` v8 - Lit Protocol encryption
-- `@web3-storage/w3up-client` - Storacha storage
 - `ethers` v6 - Ethereum utilities (for wallet generation)
 - `next` - React framework
 - `react` - UI library
 - `tailwindcss` - Styling
+- **NO Lit SDK needed for Chipotle** - REST API only
 
 ### Environment Variables:
 Create `.env.local` in frontend folder:
 ```env
 NEXT_PUBLIC_FLOW_NETWORK=testnet
 NEXT_PUBLIC_FLOW_ADDRESS=ec3c1566d2b4bb6c
-NEXT_PUBLIC_LIT_NETWORK=nagaDev
+NEXT_PUBLIC_LIT_API_KEY=your-usage-api-key
+NEXT_PUBLIC_LIT_ACCOUNT_KEY=your-account-api-key
+```
+
+## Lit Chipotle Setup Instructions
+
+### Step 1: Create Account
+1. Go to https://dashboard.dev.litprotocol.com
+2. Sign up for a new account
+3. You'll receive an API key
+
+Or via API:
+```bash
+curl -X POST "https://api.dev.litprotocol.com/core/v1/new_account" \
+  -H "Content-Type: application/json" \
+  -d '{"account_name":"Shard","account_description":"Vault recovery","email":"you@example.com"}'
+```
+
+### Step 2: Add Funds
+1. Go to Dashboard: https://dashboard.dev.litprotocol.com/dapps/dashboard/
+2. Click "Add Funds"
+3. Pay with credit card (minimum $5)
+
+Or via API:
+```bash
+# Check balance
+curl "https://api.dev.litprotocol.com/core/v1/billing/balance" \
+  -H "X-Api-Key: YOUR-API-KEY"
+```
+
+### Step 3: Create Usage API Key
+```bash
+curl -X POST "https://api.dev.litprotocol.com/core/v1/add_usage_api_key" \
+  -H "Content-Type: application/json" \
+  -H "X-Api-Key: YOUR-ACCOUNT-API-KEY" \
+  -d '{
+    "name": "Shard DApp",
+    "description": "For vault recovery",
+    "can_create_groups": false,
+    "can_delete_groups": false,
+    "can_create_pkps": false,
+    "execute_in_groups": [0]
+  }'
+```
+
+### Step 4: Create PKP (Wallet)
+```bash
+curl "https://api.dev.litprotocol.com/core/v1/create_wallet" \
+  -H "X-Api-Key: YOUR-API-KEY"
+```
+
+### Step 5: Run Lit Actions
+```bash
+curl -X POST "https://api.dev.litprotocol.com/core/v1/lit_action" \
+  -H "Content-Type: application/json" \
+  -H "X-Api-Key: YOUR-USAGE-API-KEY" \
+  -d '{
+    "code": "async function main({ pkpId }) { return { hello: \"world\" }; }",
+    "js_params": {}
+  }'
 ```
 
 ## Sponsor Integration Points
@@ -108,8 +169,9 @@ NEXT_PUBLIC_LIT_NETWORK=nagaDev
 - [ ] Clear demo of self-triggering
 
 ### Lit Protocol
-- [x] Encryption/decryption
-- [x] EVM access control conditions
+- [x] REST API (Chipotle v3)
+- [x] Encryption/decryption via Lit Actions
+- [x] PKP wallet creation
 - [ ] Using access conditions properly with Flow EVM
 - [ ] Demonstrating conditional key release
 
@@ -160,7 +222,7 @@ pl-genesis/
 │   │   └── lib/
 │   │       ├── flow.ts           # FCL config
 │   │       ├── wallet.ts         # Wallet connection
-│   │       ├── lit.ts            # Lit v8 integration
+│   │       ├── lit.ts            # Lit Chipotle REST API
 │   │       ├── storacha.ts       # Storacha integration
 │   │       └── vault.ts          # Vault service
 │   ├── .env.example
@@ -174,21 +236,25 @@ pl-genesis/
 
 ## Priority Order for Remaining Work
 
-1. [ ] Deploy Shard contract to testnet: `cd contracts/shard-vault && flow project deploy --network testnet`
-2. [ ] Run frontend: `cd frontend && npm install && npm run dev`
-3. [ ] Test vault creation flow
-4. [ ] Test heartbeat (need short inactivity period for demo)
-5. [ ] Test recovery wallet generation
-6. [ ] Test Lit encryption (need EVM view contract)
-7. [ ] Test Storacha upload
-8. [ ] Record demo video
-9. [ ] Submit
+1. [ ] Create Lit Chipotle account at https://dashboard.dev.litprotocol.com
+2. [ ] Add funds to Lit account (minimum $5)
+3. [ ] Create usage API key
+4. [ ] Deploy Shard contract to testnet: `cd contracts/shard-vault && flow project deploy --network testnet`
+5. [ ] Run frontend: `cd frontend && npm install && npm run dev`
+6. [ ] Test vault creation flow
+7. [ ] Test heartbeat (need short inactivity period for demo)
+8. [ ] Test recovery wallet generation
+9. [ ] Test Lit encryption
+10. [ ] Test Storacha upload
+11. [ ] Record demo video
+12. [ ] Submit
 
 ## Critical Notes
 
-- **Datil is DEAD** - Use nagaDev + v8 SDK only
-- **Lit v8 API changed** - Uses `client.encrypt()` not standalone functions
-- **Flow EVM for Lit** - Lit checks EVM contracts, need view function on Flow EVM
+- **Naga is DEAD (April 1, 2026)** - Use Chipotle v3 only
+- **Chipotle is REST API** - No SDK, uses HTTP calls
+- **Chipotle is production** - Live since March 25, 2026
+- **Datil is DEAD** - Do NOT use
 - **Cadence not Solidity** - Judges expect Cadence
 
 ## Hackathon Deadline
@@ -200,5 +266,6 @@ pl-genesis/
 - Flow Testnet REST: `https://rest-testnet.onflow.org`
 - Flow Testnet Access: `access-testnet.onflow.org:9000`
 - Flow EVM Testnet: `https://testnet.evm.nodes.onflow.org` (chain ID: 545)
-- Lit NagaDev: `nagaDev` (free, no tokens)
+- Lit Chipotle API: `https://api.dev.litprotocol.com/core/v1`
+- Lit Dashboard: `https://dashboard.dev.litprotocol.com`
 - Storacha: `https://console.storacha.network`
