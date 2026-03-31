@@ -1,5 +1,7 @@
 # Shard - Dead Man's Switch Wallet Recovery
 
+Hi
+
 **Your vault wakes up on its own if you stop checking in.**
 
 A self-custodial inheritance system built on Flow blockchain using scheduled transactions, Lit Protocol for programmatic PKP wallets + conditional access, and Storacha for decentralized storage.
