@@ -65,7 +65,6 @@ export default function VaultPage() {
     if (!walletAddr) return;
 
     try {
-      // Get vault IDs
       const getVaultIdsCode = `
         import "Shard"
         pub fun main(owner: Address): [UInt64] {
@@ -88,7 +87,6 @@ export default function VaultPage() {
         return;
       }
 
-      // Get vault data for each ID
       const getVaultCode = `
         import "Shard"
         pub fun main(owner: Address, vaultId: UInt64): AnyStruct {
@@ -141,7 +139,6 @@ export default function VaultPage() {
   useEffect(() => {
     if (walletAddr) {
       fetchVaults();
-      // Refresh every 30 seconds
       const interval = setInterval(fetchVaults, 30000);
       return () => clearInterval(interval);
     }
@@ -171,105 +168,100 @@ export default function VaultPage() {
 
   if (loading) {
     return (
-      <main className="min-h-screen bg-gradient-to-b from-gray-900 to-gray-800 text-white flex items-center justify-center">
-        <div className="text-xl">Loading vaults...</div>
+      <main className="min-h-screen bg-black text-white flex items-center justify-center">
+        <p className="font-mono text-xs text-neutral-500 animate-pulse">Loading vaults...</p>
       </main>
     );
   }
 
   return (
-    <main className="min-h-screen bg-gradient-to-b from-gray-900 to-gray-800 text-white">
-      <div className="container mx-auto px-4 py-16">
-        <Link href="/" className="text-gray-400 hover:text-white mb-8 inline-block">
-          &larr; Back to Home
-        </Link>
-
-        <h1 className="text-4xl font-bold mb-8">My Vaults</h1>
+    <main className="min-h-screen bg-black text-white">
+      <div className="max-w-2xl mx-auto px-6 py-24">
+        <header className="mb-16">
+          <Link href="/" className="text-xs font-mono text-neutral-600 hover:text-neutral-400 uppercase tracking-widest transition-colors">
+            &larr; Back
+          </Link>
+          <h1 className="text-3xl font-light mt-8">My Vaults</h1>
+          <p className="font-mono text-xs text-neutral-600 mt-2">Manage your vaults</p>
+        </header>
 
         {!walletAddr ? (
-          <div className="max-w-md mx-auto text-center bg-gray-800 rounded-2xl p-8 border border-gray-700">
-            <p className="text-gray-400 mb-6">Connect your wallet to view vaults</p>
+          <div className="border border-neutral-800 p-8">
+            <p className="font-mono text-sm text-neutral-500">Connect wallet to view vaults</p>
           </div>
         ) : vaults.length === 0 ? (
-          <div className="max-w-md mx-auto text-center bg-gray-800 rounded-2xl p-8 border border-gray-700">
-            <p className="text-gray-400 mb-6">No vaults found</p>
-            <Link
-              href="/create"
-              className="inline-block py-3 px-6 bg-emerald-600 hover:bg-emerald-500 rounded-lg font-semibold"
-            >
-              Create Vault
+          <div className="space-y-6">
+            <div className="border border-neutral-800 p-8">
+              <p className="font-mono text-sm text-neutral-500">No vaults found</p>
+            </div>
+            <Link href="/create">
+              <div className="border border-neutral-800 px-6 py-3 hover:border-neutral-600 transition-colors inline-block">
+                <span className="font-mono text-sm text-neutral-300 uppercase tracking-widest">Create Vault</span>
+              </div>
             </Link>
           </div>
         ) : (
-          <div className="space-y-6">
+          <div className="space-y-8">
             {error && (
-              <div className="bg-red-900/50 border border-red-700 rounded-lg p-4 text-red-300">
-                {error}
+              <div className="border border-neutral-800 p-4">
+                <p className="font-mono text-xs text-neutral-400">{error}</p>
               </div>
             )}
 
             {vaults.map((vault) => (
-              <div
-                key={vault.id}
-                className="bg-gray-800 rounded-2xl p-6 border border-gray-700"
-              >
-                <div className="flex justify-between items-start mb-4">
+              <div key={vault.id} className="border border-neutral-800 p-6">
+                <div className="flex justify-between items-start mb-6">
                   <div>
-                    <h2 className="text-2xl font-bold">Vault #{vault.id}</h2>
-                    <p
-                      className={`text-lg font-semibold ${
-                        vault.triggered ? "text-red-400" : "text-emerald-400"
-                      }`}
-                    >
-                      {vault.triggered ? "TRIGGERED" : "Active"}
-                    </p>
+                    <p className="text-xs font-mono text-neutral-500 uppercase tracking-widest mb-1">Vault</p>
+                    <p className="font-mono text-lg">#{vault.id}</p>
                   </div>
                   <div className="text-right">
-                    <p className="text-sm text-gray-400">Time Until Trigger</p>
-                    <p
-                      className={`text-2xl font-bold ${
-                        vault.triggered ? "text-red-400" : "text-cyan-400"
-                      }`}
-                    >
+                    <p className="text-xs font-mono text-neutral-500 uppercase tracking-widest mb-1">Time Until Trigger</p>
+                    <p className={`font-mono text-lg ${vault.triggered ? 'text-neutral-300' : 'text-neutral-400'}`}>
                       {formatTimeRemaining(vault.timeUntilTrigger)}
                     </p>
                   </div>
                 </div>
 
-                <div className="grid grid-cols-2 gap-4 mb-6">
-                  <div>
-                    <p className="text-sm text-gray-400">Beneficiary</p>
-                    <p className="font-mono text-sm truncate">
-                      {vault.recoveryAddress.slice(0, 10)}...
-                      {vault.recoveryAddress.slice(-6)}
+                <div className="space-y-3 mb-6">
+                  <div className="flex justify-between">
+                    <p className="text-xs font-mono text-neutral-600">Beneficiary</p>
+                    <p className="font-mono text-xs text-neutral-400">
+                      {vault.recoveryAddress.slice(0, 8)}...{vault.recoveryAddress.slice(-6)}
                     </p>
                   </div>
-                  <div>
-                    <p className="text-sm text-gray-400">Inactivity Period</p>
-                    <p className="font-semibold">
+                  <div className="flex justify-between">
+                    <p className="text-xs font-mono text-neutral-600">Inactivity Period</p>
+                    <p className="font-mono text-xs text-neutral-400">
                       {parseFloat(vault.inactivityPeriodSeconds) / 86400} days
+                    </p>
+                  </div>
+                  <div className="flex justify-between">
+                    <p className="text-xs font-mono text-neutral-600">Status</p>
+                    <p className={`font-mono text-xs ${vault.triggered ? 'text-neutral-300' : 'text-neutral-600'}`}>
+                      {vault.triggered ? 'TRIGGERED' : 'Active'}
                     </p>
                   </div>
                 </div>
 
                 {!vault.triggered && (
-                  <button
+                  <div
                     onClick={() => handleHeartbeat(vault.id)}
-                    disabled={heartbeating === vault.id}
-                    className="w-full py-3 bg-gradient-to-r from-emerald-500 to-cyan-500 hover:from-emerald-400 hover:to-cyan-400 rounded-lg font-bold transition-all disabled:opacity-50"
+                    className={`border border-neutral-800 px-6 py-3 transition-colors cursor-pointer ${
+                      heartbeating === vault.id ? 'opacity-50 cursor-not-allowed' : 'hover:border-neutral-600'
+                    }`}
                   >
-                    {heartbeating === vault.id
-                      ? "Sending Heartbeat..."
-                      : "Send Heartbeat (I'm Alive)"}
-                  </button>
+                    <span className="font-mono text-sm text-neutral-300 uppercase tracking-widest">
+                      {heartbeating === vault.id ? 'Sending...' : 'Heartbeat'}
+                    </span>
+                  </div>
                 )}
 
                 {vault.triggered && (
-                  <Link
-                    href="/claim"
-                    className="block w-full py-3 bg-gradient-to-r from-purple-500 to-pink-500 hover:from-purple-400 hover:to-pink-400 rounded-lg font-bold text-center transition-all"
-                  >
-                    Claim Recovery
+                  <Link href="/claim">
+                    <div className="border border-neutral-800 px-6 py-3 hover:border-neutral-600 transition-colors inline-block">
+                      <span className="font-mono text-sm text-neutral-300 uppercase tracking-widest">Claim Recovery</span>
+                    </div>
                   </Link>
                 )}
               </div>

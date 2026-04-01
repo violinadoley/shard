@@ -2,46 +2,95 @@
 
 import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
-import { fcl, t, sendTransaction } from "@/lib/flow";
-import { connectWallet, getWalletAddress } from "@/lib/wallet";
-import { setupVaultWithRecovery, setRecoveryCIDOnContract, formatTimeRemaining } from "@/lib/vault";
-import { ethers } from "ethers";
+import { fcl, t } from "@/lib/flow";
+import { getWalletAddress } from "@/lib/wallet";
+import { createPKP } from "@/lib/lit";
+import { uploadLitAction } from "@/lib/storacha";
 import Link from "next/link";
 
+const LIT_ACTION_CODE = `
+const go = async () => {
+  const FLOW_TESTNET_REST = "https://rest-testnet.onflow.org";
+  const IS_TRIGGERED_SCRIPT = \`
+import Shard from 0x\${jsParams.flowContractAddress}
+access(all) fun main(owner: Address, vaultId: UInt64): Bool {
+    let vaultOwner = getAccount(owner)
+        .capabilities.borrow<&{Shard.VaultOwnerPublic}>(at: /public/shardVaultOwner)
+    if vaultOwner == nil { return false }
+    return vaultOwner!.getVaultTriggered(vaultId) ?? false
+}
+  \`.trim();
+  const ownerArg = { type: "Address", value: "0x" + jsParams.ownerAddress.replace("0x", "") };
+  const vaultIdArg = { type: "UInt64", value: jsParams.vaultId.toString() };
+  let triggered = false;
+  try {
+    const response = await fetch(\`\${FLOW_TESTNET_REST}/v1/scripts?block_height=sealed\`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ script: btoa(IS_TRIGGERED_SCRIPT), arguments: [btoa(JSON.stringify(ownerArg)), btoa(JSON.stringify(vaultIdArg))] })
+    });
+    if (!response.ok) { Lit.Actions.setResponse({ response: JSON.stringify({ error: "Flow API error" }) }); return; }
+    const result = await response.json();
+    const decoded = atob(result.value);
+    const parsed = JSON.parse(decoded);
+    triggered = parsed.value === true || parsed.value === "true";
+  } catch (e) {
+    Lit.Actions.setResponse({ response: JSON.stringify({ error: "Failed to query Flow: " + e.message }) }); return;
+  }
+  if (!triggered) { Lit.Actions.setResponse({ response: JSON.stringify({ status: "NOT_TRIGGERED", vaultId: jsParams.vaultId }) }); return; }
+  const message = "shard-vault-claim-" + jsParams.vaultId + "-" + jsParams.ownerAddress;
+  const msgHash = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(message));
+  const msgHashHex = Array.from(new Uint8Array(msgHash)).map(b => b.toString(16).padStart(2, "0")).join("");
+  await Lit.Actions.signEcdsa({ toSign: msgHashHex, publicKey: pkpPublicKey, sigName: "shard_claim_sig" });
+  Lit.Actions.setResponse({ response: JSON.stringify({ status: "TRIGGERED", vaultId: jsParams.vaultId, message: "PKP signed — vault access granted" }) });
+};
+go();
+`;
+
 const CREATE_VAULT_CODE = `
-import "Shard"
-import "FlowTransactionSchedulerUtils"
+import Shard from 0xShard
+import FlowTransactionSchedulerUtils from 0x8c5303eaa26202d6
 
-transaction(
-    recoveryAddress: Address,
-    inactivityPeriodDays: UInt64
-) {
+transaction(recoveryAddress: Address, inactivityPeriodDays: UInt64) {
     prepare(signer: auth(Storage, Capabilities) &Account) {
-        // Check if VaultOwner already exists
         if signer.storage.borrow<&Shard.VaultOwner>(from: Shard.vaultStoragePath) == nil {
-            let vaultOwner <- create VaultOwner(signer.address)
+            let vaultOwner <- create Shard.VaultOwner(_owner: signer.address)
             signer.storage.save(<-vaultOwner, to: Shard.vaultStoragePath)
+            let cap = signer.capabilities.storage.issue<&{Shard.VaultOwnerPublic}>(Shard.vaultStoragePath)
+            signer.capabilities.publish(cap, at: Shard.vaultOwnerPublicPath)
         }
-
-        let vaultOwner = signer.storage.borrow<&Shard.VaultOwner>(
-            from: Shard.vaultStoragePath
-        ) ?? panic("VaultOwner not found")
-
+        let vaultOwner = signer.storage.borrow<&Shard.VaultOwner>(from: Shard.vaultStoragePath)
+            ?? panic("VaultOwner not found")
         let inactivityPeriodSeconds = UFix64(inactivityPeriodDays) * 86400.0
-
-        let vaultId = vaultOwner.createVault(
-            recoveryAddress: recoveryAddress,
-            inactivityPeriodSeconds: inactivityPeriodSeconds
-        )
-
+        let vaultId = vaultOwner.createVault(recoveryAddress: recoveryAddress, inactivityPeriodSeconds: inactivityPeriodSeconds)
         log("Created vault: ".concat(vaultId.toString()))
+        vaultOwner.scheduleHeartbeatCheck(vaultId: vaultId, delaySeconds: inactivityPeriodSeconds)
+    }
+}
+`;
 
-        vaultOwner.scheduleHeartbeatCheck(
-            vaultId: vaultId,
-            delaySeconds: inactivityPeriodSeconds
-        )
+const SET_RECOVERY_CID_CODE = `
+import Shard from 0xShard
 
-        log("Scheduled heartbeat check")
+transaction(vaultId: UInt64, recoveryWalletCID: String) {
+    prepare(signer: auth(Storage) &Account) {
+        let vaultOwner = signer.storage.borrow<&Shard.VaultOwner>(from: Shard.vaultStoragePath)
+            ?? panic("VaultOwner not found")
+        let vault = vaultOwner.getVault(vaultId) ?? panic("Vault not found")
+        vault.setRecoveryWalletCID(recoveryWalletCID)
+    }
+}
+`;
+
+const SET_RECOVERY_ADDRESS_CODE = `
+import Shard from 0xShard
+
+transaction(vaultId: UInt64, pkpWalletAddress: String) {
+    prepare(signer: auth(Storage) &Account) {
+        let vaultOwner = signer.storage.borrow<&Shard.VaultOwner>(from: Shard.vaultStoragePath)
+            ?? panic("VaultOwner not found")
+        let vault = vaultOwner.getVault(vaultId) ?? panic("Vault not found")
+        vault.setRecoveryWalletAddress(pkpWalletAddress)
     }
 }
 `;
@@ -51,26 +100,24 @@ export default function CreateVault() {
   const [inactivityDays, setInactivityDays] = useState("30");
   const [walletAddr, setWalletAddr] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
+  const [step, setStep] = useState<string>("");
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState(false);
-  const [recoveryWalletInfo, setRecoveryWalletInfo] = useState<{
-    address: string;
-    warning: string;
-  } | null>(null);
-  const [txId, setTxId] = useState<string | null>(null);
+  const [pkpAddress, setPkpAddress] = useState<string | null>(null);
+  const [litActionCid, setLitActionCid] = useState<string | null>(null);
+  const [vaultId, setVaultId] = useState<string | null>(null);
   const router = useRouter();
+
+  const LIT_API_KEY = process.env.NEXT_PUBLIC_LIT_API_KEY || "";
 
   useEffect(() => {
     const addr = getWalletAddress();
-    if (!addr) {
-      router.push("/");
-    }
+    if (!addr) router.push("/");
     setWalletAddr(addr);
 
     const unsubscribe = fcl.currentUser().subscribe((user: any) => {
       setWalletAddr(user.addr || null);
     });
-
     return () => unsubscribe();
   }, [router]);
 
@@ -79,10 +126,8 @@ export default function CreateVault() {
       setError("Please fill in all fields");
       return;
     }
-
-    // Validate Flow address format
     if (!recoveryAddress.startsWith("0x") || recoveryAddress.length !== 18) {
-      setError("Invalid Flow address format (should be 0x...)");
+      setError("Invalid Flow address format (0x + 16 hex chars)");
       return;
     }
 
@@ -90,8 +135,16 @@ export default function CreateVault() {
     setError(null);
 
     try {
-      // Step 1: Create vault on Flow
-      const transactionId = await fcl.send([
+      setStep("Creating recovery wallet...");
+      const pkp = await createPKP(LIT_API_KEY);
+      setPkpAddress(pkp.walletAddress);
+
+      setStep("Uploading access logic...");
+      const litActionCID = await uploadLitAction(LIT_ACTION_CODE);
+      setLitActionCid(litActionCID);
+
+      setStep("Creating vault on Flow...");
+      const createTxId = await fcl.send([
         fcl.transaction(CREATE_VAULT_CODE),
         fcl.args([
           fcl.arg(recoveryAddress, t.Address),
@@ -102,132 +155,158 @@ export default function CreateVault() {
         fcl.authorizations([fcl.currentUser().authorization]),
         fcl.limit(9999),
       ]);
+      const createTx = await fcl.tx(createTxId).onceSealed();
 
-      const tx = await fcl.tx(transactionId).onceSealed();
-
-      if (tx.status === 4) {
-        setTxId(transactionId);
-        setSuccess(true);
-
-        // Show recovery wallet info to user
-        // Note: In production, we'd parse the vault ID from events
-        // For now, we show a placeholder
-        setRecoveryWalletInfo({
-          address: "Will be displayed after vault creation",
-          warning: "IMPORTANT: Save this recovery wallet address!",
-        });
-
-        setTimeout(() => {
-          router.push("/vault");
-        }, 5000);
-      } else {
-        setError("Transaction failed: " + tx.errorMessage);
+      if (createTx.status !== 4) {
+        throw new Error("Vault creation failed: " + (createTx.errorMessage || "unknown error"));
       }
+
+      let createdVaultId = "1";
+      const vaultCreatedEvent = createTx.events?.find(
+        (e: any) => e.type.includes("VaultCreated")
+      );
+      if (vaultCreatedEvent?.data?.vaultId) {
+        createdVaultId = vaultCreatedEvent.data.vaultId.toString();
+      }
+      setVaultId(createdVaultId);
+
+      setStep("Storing IPFS CID...");
+      const cidTxId = await fcl.send([
+        fcl.transaction(SET_RECOVERY_CID_CODE),
+        fcl.args([
+          fcl.arg(createdVaultId, t.UInt64),
+          fcl.arg(litActionCID, t.String),
+        ]),
+        fcl.proposer(fcl.currentUser().authorization),
+        fcl.payer(fcl.currentUser().authorization),
+        fcl.authorizations([fcl.currentUser().authorization]),
+        fcl.limit(9999),
+      ]);
+      await fcl.tx(cidTxId).onceSealed();
+
+      setStep("Storing PKP address...");
+      const addrTxId = await fcl.send([
+        fcl.transaction(SET_RECOVERY_ADDRESS_CODE),
+        fcl.args([
+          fcl.arg(createdVaultId, t.UInt64),
+          fcl.arg(pkp.walletAddress, t.String),
+        ]),
+        fcl.proposer(fcl.currentUser().authorization),
+        fcl.payer(fcl.currentUser().authorization),
+        fcl.authorizations([fcl.currentUser().authorization]),
+        fcl.limit(9999),
+      ]);
+      await fcl.tx(addrTxId).onceSealed();
+
+      setStep("");
+      setSuccess(true);
+      setTimeout(() => router.push("/vault"), 8000);
+
     } catch (e: any) {
       console.error("Error creating vault:", e);
       setError(e.message || "Failed to create vault");
+      setStep("");
     }
 
     setCreating(false);
   };
 
   return (
-    <main className="min-h-screen bg-gradient-to-b from-gray-900 to-gray-800 text-white">
-      <div className="container mx-auto px-4 py-16">
-        <Link href="/" className="text-gray-400 hover:text-white mb-8 inline-block">
-          &larr; Back to Home
-        </Link>
+    <main className="min-h-screen bg-black text-white">
+      <div className="max-w-2xl mx-auto px-6 py-24">
+        <header className="mb-16">
+          <Link href="/" className="text-xs font-mono text-neutral-600 hover:text-neutral-400 uppercase tracking-widest transition-colors">
+            &larr; Back
+          </Link>
+          <h1 className="text-3xl font-light mt-8">Create Vault</h1>
+          <p className="font-mono text-xs text-neutral-600 mt-2">Set up your dead man's switch</p>
+        </header>
 
-        <div className="max-w-lg mx-auto">
-          <h1 className="text-4xl font-bold mb-2">Create Vault</h1>
-          <p className="text-gray-400 mb-8">
-            Set up your dead man's switch vault
-          </p>
-
-          <div className="bg-gray-800 rounded-2xl p-8 border border-gray-700 space-y-6">
-            <div>
-              <label className="block text-sm font-medium mb-2">
-                Beneficiary Address
-              </label>
-              <input
-                type="text"
-                value={recoveryAddress}
-                onChange={(e) => setRecoveryAddress(e.target.value)}
-                placeholder="0x..."
-                className="w-full px-4 py-3 bg-gray-700 rounded-lg border border-gray-600 focus:border-emerald-500 focus:outline-none font-mono"
-              />
-              <p className="text-xs text-gray-500 mt-1">
-                The Flow wallet that will receive your assets
-              </p>
-            </div>
-
-            <div>
-              <label className="block text-sm font-medium mb-2">
-                Inactivity Period (days)
-              </label>
-              <input
-                type="number"
-                value={inactivityDays}
-                onChange={(e) => setInactivityDays(e.target.value)}
-                min="1"
-                max="365"
-                className="w-full px-4 py-3 bg-gray-700 rounded-lg border border-gray-600 focus:border-emerald-500 focus:outline-none"
-              />
-              <p className="text-xs text-gray-500 mt-1">
-                If you don't check in for this many days, vault auto-triggers
-              </p>
-            </div>
-
-            <div className="bg-gray-700/50 rounded-lg p-4">
-              <h3 className="font-medium mb-2">What happens:</h3>
-              <ol className="text-sm text-gray-400 space-y-2 list-decimal list-inside">
-                <li>Vault created on Flow blockchain</li>
-                <li>Scheduled transaction set for {inactivityDays} days</li>
-                <li>Vault self-triggers if you don't heartbeat</li>
-                <li>Beneficiary can claim after trigger</li>
-              </ol>
-            </div>
-
-            {error && (
-              <div className="bg-red-900/50 border border-red-700 rounded-lg p-4 text-red-300 text-sm">
-                {error}
-              </div>
-            )}
-
-            {success ? (
-              <div className="space-y-4">
-                <div className="bg-emerald-900/50 border border-emerald-700 rounded-lg p-4 text-emerald-300">
-                  <p className="font-bold mb-2">Vault Created Successfully!</p>
-                  <p className="text-sm">Transaction ID: {txId?.slice(0, 16)}...</p>
-                </div>
-
-                {recoveryWalletInfo && (
-                  <div className="bg-yellow-900/50 border border-yellow-700 rounded-lg p-4">
-                    <p className="text-yellow-300 font-bold mb-2">
-                      {recoveryWalletInfo.warning}
-                    </p>
-                    <p className="text-sm text-gray-400">
-                      The system generates a fresh recovery wallet.
-                      Share the recovery wallet address with your beneficiary.
-                      When triggered, they can claim and access the funds.
-                    </p>
-                  </div>
-                )}
-
-                <p className="text-center text-gray-400 text-sm">
-                  Redirecting to vault page...
-                </p>
-              </div>
-            ) : (
-              <button
-                onClick={handleCreateVault}
-                disabled={creating || !recoveryAddress}
-                className="w-full py-4 bg-gradient-to-r from-emerald-500 to-cyan-500 hover:from-emerald-400 hover:to-cyan-400 rounded-lg font-bold text-lg transition-all disabled:opacity-50"
-              >
-                {creating ? "Creating Vault..." : "Create Vault"}
-              </button>
-            )}
+        <div className="space-y-12">
+          <div className="space-y-2">
+            <label className="text-xs font-mono text-neutral-500 uppercase tracking-widest">
+              Beneficiary Address
+            </label>
+            <input
+              type="text"
+              value={recoveryAddress}
+              onChange={(e) => setRecoveryAddress(e.target.value)}
+              placeholder="0x..."
+              className="w-full px-0 py-3 border-b border-neutral-800 focus:border-neutral-400 bg-transparent text-white text-lg font-mono"
+            />
+            <p className="text-xs font-mono text-neutral-600">Flow wallet that can claim after trigger</p>
           </div>
+
+          <div className="space-y-2">
+            <label className="text-xs font-mono text-neutral-500 uppercase tracking-widest">
+              Inactivity Period (days)
+            </label>
+            <input
+              type="number"
+              value={inactivityDays}
+              onChange={(e) => setInactivityDays(e.target.value)}
+              min="1"
+              max="365"
+              className="w-full px-0 py-3 border-b border-neutral-800 focus:border-neutral-400 bg-transparent text-white text-lg font-mono"
+            />
+            <p className="text-xs font-mono text-neutral-600">Vault auto-triggers if heartbeat stops</p>
+          </div>
+
+          {error && (
+            <div className="border border-neutral-800 p-4">
+              <p className="font-mono text-xs text-neutral-400">{error}</p>
+            </div>
+          )}
+
+          {creating && step && (
+            <div className="border border-neutral-800 p-4">
+              <p className="font-mono text-xs text-neutral-500 animate-pulse">{step}</p>
+            </div>
+          )}
+
+          {success ? (
+            <div className="space-y-8">
+              <div className="border border-neutral-800 p-6">
+                <p className="text-xs font-mono text-neutral-500 uppercase tracking-widest mb-2">Vault Created</p>
+                <p className="font-mono text-lg">#{vaultId}</p>
+              </div>
+
+              {pkpAddress && (
+                <div className="border border-neutral-800 p-4">
+                  <p className="text-xs font-mono text-neutral-500 uppercase tracking-widest mb-2">Recovery Wallet (PKP)</p>
+                  <p className="font-mono text-xs text-neutral-400 break-all">{pkpAddress}</p>
+                </div>
+              )}
+
+              {litActionCid && (
+                <div className="border border-neutral-800 p-4">
+                  <p className="text-xs font-mono text-neutral-500 uppercase tracking-widest mb-2">Lit Action CID</p>
+                  <p className="font-mono text-xs text-neutral-400 break-all">{litActionCid}</p>
+                </div>
+              )}
+
+              <p className="font-mono text-xs text-neutral-600">Redirecting to vault page...</p>
+            </div>
+          ) : (
+            <div className="pt-4">
+              <div
+                onClick={() => !creating && recoveryAddress && LIT_API_KEY && handleCreateVault()}
+                className={`border border-neutral-800 px-8 py-4 transition-colors inline-block cursor-pointer ${
+                  creating || !recoveryAddress || !LIT_API_KEY ? 'opacity-40 cursor-not-allowed' : 'hover:border-neutral-600'
+                }`}
+              >
+                <span className="font-mono text-sm text-neutral-300 uppercase tracking-widest">
+                  {creating ? 'Creating...' : 'Create Vault'}
+                </span>
+              </div>
+
+              {!LIT_API_KEY && (
+                <p className="font-mono text-xs text-neutral-600 mt-4">
+                  NEXT_PUBLIC_LIT_API_KEY not set in .env.local
+                </p>
+              )}
+            </div>
+          )}
         </div>
       </div>
     </main>

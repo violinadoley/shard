@@ -1,21 +1,10 @@
 import "Shard"
 
-pub fun main(owner: Address, vaultId: UInt64): AnyStruct {
-    let vaultOwner = Shard.account.storage.borrow<&Shard.VaultOwner>(
-        from: Shard.vaultStoragePath
-    ) ?? panic("VaultOwner not found")
+access(all) fun main(owner: Address, vaultId: UInt64): Shard.VaultData {
+    let vaultOwner = getAccount(owner)
+        .capabilities.borrow<&{Shard.VaultOwnerPublic}>(at: /public/shardVaultOwner)
+        ?? panic("VaultOwner not found for address")
 
-    let vault = vaultOwner.getVault(vaultId)
+    return vaultOwner.getVaultData(vaultId)
         ?? panic("Vault not found")
-
-    return {
-        "id": vault.id,
-        "owner": vault.owner,
-        "recoveryAddress": vault.recoveryAddress,
-        "inactivityPeriodSeconds": vault.inactivityPeriodSeconds,
-        "lastHeartbeat": vault.lastHeartbeat,
-        "triggered": vault.triggered,
-        "recoveryWalletCID": vault.recoveryWalletCID,
-        "timeUntilTrigger": vault.getTimeUntilTrigger()
-    }
 }
